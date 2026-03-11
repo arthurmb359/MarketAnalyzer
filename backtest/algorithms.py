@@ -58,162 +58,6 @@ def _find_stress_periods(df: pd.DataFrame) -> list[dict]:
 
     return periods
 
-
-def _detect_new_normal(
-    df: pd.DataFrame,
-    start_idx: int,
-    end_idx: int,
-    window_days: int = 180,
-    min_delta: float = 0.25,
-) -> tuple[pd.Timestamp | None, str]:
-    """
-    Detecta se houve 'novo normal' comparando o nível médio do macro_score_smooth
-    antes e depois do período de stress.
-
-    Regras:
-    - calcula a média dos `window_days` anteriores ao início do stress
-    - calcula a média dos `window_days` posteriores ao fim do stress
-    - se a média pós-stress for maior que a média pré-stress por pelo menos `min_delta`,
-      considera mudança estrutural
-
-    Retorna:
-    - data inicial da janela pós-stress, se houver novo normal
-    - explicação textual
-    """
-    work = df.dropna(subset=["macro_score_smooth"]).copy()
-    work = work.sort_values("data").reset_index(drop=True)
-
-    if start_idx < 0 or end_idx >= len(work) or start_idx > end_idx:
-        return None, "Índices inválidos para detecção de novo normal."
-
-    pre_start = max(0, start_idx - window_days)
-    pre_end = start_idx  # exclusivo no iloc
-    post_start = end_idx + 1
-    post_end = min(len(work), post_start + window_days)
-
-    pre_window = work.iloc[pre_start:pre_end].copy()
-    post_window = work.iloc[post_start:post_end].copy()
-
-    if len(pre_window) < 60:
-        return None, "Janela pré-stress insuficiente para comparação."
-    if len(post_window) < 60:
-        return None, "Janela pós-stress insuficiente para comparação."
-
-    pre_mean = pre_window["macro_score_smooth"].mean()
-    post_mean = post_window["macro_score_smooth"].mean()
-    delta = post_mean - pre_mean
-
-    if delta >= min_delta:
-        start_date = post_window.iloc[0]["data"]
-        explanation = (
-            f"Novo normal detectado: média pré-stress={pre_mean:.2f}, "
-            f"média pós-stress={post_mean:.2f}, delta={delta:.2f} "
-            f"(limiar={min_delta:.2f})."
-        )
-        return start_date, explanation
-
-    explanation = (
-        f"Sem novo normal: média pré-stress={pre_mean:.2f}, "
-        f"média pós-stress={post_mean:.2f}, delta={delta:.2f} "
-        f"(limiar={min_delta:.2f})."
-    )
-    return None, explanation
-
-
-def backtest_macro_regime_score() -> str:
-    df = _load_macro_frame()
-
-    # opcional: limitar ao período moderno
-    df = df[df["data"] >= pd.Timestamp("2000-01-01")].copy()
-    df = df.sort_values("data").reset_index(drop=True)
-
-    lines: list[str] = []
-
-    lines.append("=== BACKTEST: MACRO REGIME SCORE ===")
-    lines.append("")
-    lines.append(f"Observações totais: {len(df)}")
-    lines.append("")
-
-    lines.append("=== DISTRIBUIÇÃO DO MACRO SCORE BRUTO ===")
-    counts = df["macro_regime_score"].value_counts().sort_index()
-    for score, count in counts.items():
-        pct = count / len(df) * 100
-        lines.append(f"Score {score:.0f}: {count} dias ({pct:.2f}%)")
-
-    lines.append("")
-    lines.append("=== DISTRIBUIÇÃO DO MACRO SCORE SUAVIZADO ===")
-    smooth_counts = (
-        df["macro_score_smooth"]
-        .dropna()
-        .round(1)
-        .value_counts()
-        .sort_index()
-    )
-    for score, count in smooth_counts.items():
-        pct = count / len(df) * 100
-        lines.append(f"Score ~{score:.1f}: {count} dias ({pct:.2f}%)")
-
-    lines.append("")
-    lines.append("=== DISTRIBUIÇÃO DOS REGIMES ===")
-    label_counts = df["macro_regime_label"].value_counts(dropna=False)
-    for label, count in label_counts.items():
-        pct = count / len(df) * 100
-        lines.append(f"{label}: {count} dias ({pct:.2f}%)")
-
-    lines.append("")
-
-    periods = _find_stress_periods(df)
-
-    lines.append(f"Períodos de stress detectados: {len(periods)}")
-    lines.append("")
-
-    if not periods:
-        lines.append("Nenhum período de stress detectado.")
-        return "\n".join(lines)
-
-    for i, p in enumerate(periods, start=1):
-        new_normal_date, explanation = _detect_new_normal(
-            df,
-            start_idx=p["start_idx"],
-            end_idx=p["end_idx"],
-            window_days=180,
-            min_delta=0.25,
-        )
-
-        lines.append(f"[Stress #{i}]")
-        lines.append(f"Início: {p['start_date'].strftime('%d/%m/%Y')}")
-        lines.append(f"Fim:    {p['end_date'].strftime('%d/%m/%Y')}")
-        lines.append(f"Duração: {p['duration_days']} dias")
-
-        if new_normal_date is not None:
-            lines.append(f"Novo normal: {new_normal_date.strftime('%d/%m/%Y')}")
-        else:
-            lines.append("Novo normal: não detectado")
-
-        lines.append(f"Observação: {explanation}")
-        lines.append("-" * 60)
-
-    return "\n".join(lines)
-
-def _mark_signal_events(
-    df,
-    signal_col: str,
-    threshold: float,
-):
-    """
-    Marca apenas o primeiro dia em que o sinal cruza acima do limiar.
-    Remove eventos consecutivos do mesmo regime.
-    """
-    work = df.copy()
-
-    above = work[signal_col] >= threshold
-    above_prev = above.shift(1, fill_value=False)
-
-    event_col = f"event_{signal_col}_gte_{str(threshold).replace('.', '_')}"
-    work[event_col] = above & (~above_prev)
-
-    return work, event_col
-
 def _build_research_frame(duration_minima: float = 0.0):
     from macro.macro_features import (
         build_daily_macro_frame,
@@ -704,7 +548,7 @@ def backtest_optimize_entry_threshold_fine() -> str:
     import numpy as np
 
     # grid fino
-    z_values = [1.15, 1.2, 1.25, 1.30, 1.35, 1.40, 1.45, 1.50]
+    z_values = [1.15, 1.2, 1.25, 1.30, 1.35, 1.40, 1.45, 1.50, 1.55, 1.60, 1.65, 1.70, 1.75, 1.80, 1.85, 1.90, 1.95, 2.0]
     duration_minima = 15
     exit_threshold = -2.0
 
@@ -1641,5 +1485,130 @@ def backtest_realrate_trade_fx_regime_detail() -> str:
 
     lines.append("")
     lines.append(f"Total trades: {len(trades)}")
+
+    return "\n".join(lines)
+
+def _mark_signal_events(df, signal_col: str, threshold: float):
+    above = df[signal_col] >= threshold
+    prev = above.shift(1, fill_value=False)
+    event_col = f"{signal_col}_event"
+    work = df.copy()
+    work[event_col] = above & (~prev)
+    return work, event_col
+
+def backtest_realrate_signal_validity_by_fx_regime(
+    z_threshold: float = 1.7,
+    start_date: str = "2000-01-01",
+    horizons: list[int] | None = None,
+) -> str:
+    import pandas as pd
+
+    if horizons is None:
+        horizons = [21, 63, 126, 252]
+
+    # 1) base principal já pronta do projeto
+    df = _build_research_frame(duration_minima=0.0).copy()
+    df["data"] = pd.to_datetime(df["data"], errors="coerce")
+
+    # 2) colunas reais do repo
+    z_col = "zscore_rolling_5a"
+    rr_col = "taxa_media"
+
+    df = (
+        df.dropna(subset=["data", z_col, rr_col])
+          .sort_values("data")
+          .reset_index(drop=True)
+    )
+    df = df[df["data"] >= pd.Timestamp(start_date)].copy()
+
+    # 3) regime FX já existente no repo
+    fx = _build_fx_regime_frame()[["data", "fx_macro_regime"]].copy()
+    fx["data"] = pd.to_datetime(fx["data"], errors="coerce")
+
+    # merge temporal robusto, igual ao estilo do projeto
+    df = pd.merge_asof(
+        df.sort_values("data"),
+        fx.sort_values("data"),
+        on="data",
+        direction="backward",
+    )
+
+    df["fx_macro_regime"] = df["fx_macro_regime"].fillna("indefinido")
+
+    # 4) helper real do repo retorna (df, nome_da_coluna_evento)
+    df, event_col = _mark_signal_events(
+        df,
+        signal_col=z_col,
+        threshold=z_threshold,
+    )
+
+    # 5) forward moves do real rate
+    for h in horizons:
+        df[f"forward_{h}d"] = df[rr_col].shift(-h) - df[rr_col]
+
+    events = df[df[event_col]].copy()
+    events = events[events["fx_macro_regime"] != "indefinido"].copy()
+
+    lines: list[str] = []
+    lines.append("=== REAL RATE SIGNAL VALIDITY BY FX REGIME ===")
+    lines.append("")
+    lines.append(f"Período: {pd.Timestamp(start_date).strftime('%d/%m/%Y')} em diante")
+    lines.append(f"Sinal: {z_col} >= {z_threshold:.2f}")
+    lines.append(f"Eventos únicos: {len(events)}")
+    lines.append("")
+
+    if events.empty:
+        lines.append("Nenhum evento encontrado.")
+        return "\n".join(lines)
+
+    lines.append("=== DISTRIBUIÇÃO POR REGIME FX ===")
+    counts = events["fx_macro_regime"].value_counts()
+    for regime, count in counts.items():
+        pct = 100.0 * count / len(events)
+        lines.append(f"{regime}: {count} eventos ({pct:.1f}%)")
+    lines.append("")
+
+    lines.append("=== DETALHE DOS EVENTOS ===")
+    for _, row in events.iterrows():
+        parts = [
+            row["data"].strftime("%d/%m/%Y"),
+            f"z={row[z_col]:.2f}",
+            f"FX={row['fx_macro_regime']}",
+        ]
+        for h in horizons:
+            val = row[f"forward_{h}d"]
+            if pd.notna(val):
+                parts.append(f"{h}d={val:+.2f}")
+        lines.append(" | ".join(parts))
+    lines.append("")
+
+    lines.append("=== RESUMO POR REGIME FX ===")
+    for regime in ["normal", "alerta", "turbulencia", "stress"]:
+        subset = events[events["fx_macro_regime"] == regime].copy()
+
+        if subset.empty:
+            continue
+
+        lines.append("")
+        lines.append(f"[{regime}]")
+        lines.append(f"Eventos: {len(subset)}")
+
+        for h in horizons:
+            col = f"forward_{h}d"
+            valid = subset[col].dropna()
+
+            if valid.empty:
+                lines.append(f"{h}d | sem dados suficientes")
+                continue
+
+            mean_move = valid.mean()
+            median_move = valid.median()
+            reversion_hit = (valid < 0).mean() * 100.0
+
+            lines.append(
+                f"{h:>3}d | média: {mean_move:+.3f} | "
+                f"mediana: {median_move:+.3f} | "
+                f"reversão (queda da taxa): {reversion_hit:5.1f}%"
+            )
 
     return "\n".join(lines)

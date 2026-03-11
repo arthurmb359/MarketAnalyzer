@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from backtest import registry
 from backtest.registry import BacktestRegistry
-from backtest.ui import BacktestWindow
+from backtest.ui import MarketAnalyzerWindow
 from pathlib import Path
 import sys
 import matplotlib.dates as mdates
@@ -10,52 +9,74 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from pandas.api.types import is_string_dtype
 from macro.macro_features import *
-from backtest.algorithms import *
-from pathlib import Path
-import pandas as pd
+from backtest.algorithms import (
+    backtest_fx_forward_returns,
+    backtest_fx_regime_event_sensitivity,
+    backtest_fx_trend_vol_regime,
+    backtest_macro_entry_impact,
+    backtest_macro_variable_event_sensitivity,
+    backtest_optimize_entry_threshold_fine,
+    backtest_optimize_macro_regime_thresholds,
+    backtest_realrate_signal_validity_by_fx_regime,
+    backtest_realrate_trade_by_fx_regime,
+    backtest_realrate_trade_fx_regime_detail,
+)
 
 
 CSV_PATH = Path("data/ipca_principal.csv")
 
 def main() -> int:
     try:
+        df = load_data(CSV_PATH)
+        daily = build_daily_series(df)
+        daily = add_forward_returns(daily)
+        app_registry = create_backtest_registry()
 
-        registry = BacktestRegistry()
-
-        registry.register("Macro Regime Score", backtest_macro_regime_score)
-        registry.register("Optimize Entry Threshold Fine", backtest_optimize_entry_threshold_fine)
-        registry.register("Macro Entry Impact", backtest_macro_entry_impact)
-        registry.register("FX Trend Vol Regime", backtest_fx_trend_vol_regime)
-        registry.register("FX Regime Event Sensitivity", backtest_fx_regime_event_sensitivity)
-        registry.register("FX Regime Forward Returns", backtest_fx_forward_returns)
-        registry.register("Real Rate Trade by FX Regime", backtest_realrate_trade_by_fx_regime)
-        registry.register("Real Rate Trade by FX Regime Detail", backtest_realrate_trade_fx_regime_detail)
-        
-
-        app = BacktestWindow(registry)
+        app = MarketAnalyzerWindow(daily=daily, registry=app_registry)
         app.run()
-        # df = load_data(CSV_PATH)
-        # daily = build_daily_series(df)
-        # daily = add_forward_returns(daily)
-        # macro_df = load_macro_regime_data()
-
-        # print_summary(daily)
-        #run_event_studies(daily)
-        #analyze_expected_bond_returns(daily)
-
-        #run_event_studies_rolling(daily) # rolling 5 anos
-        #analyze_expected_bond_returns_generic(daily=daily,signal_col="zscore_rolling_5a")
-        #plot_series(daily)
 
         return 0
 
     except Exception as exc:
-        print(f"Erro ao executar análise: {exc}", file=sys.stderr)
+        print(f"Erro ao executar analise: {exc}", file=sys.stderr)
         return 1
 
-if __name__ == "__main__":
-    raise SystemExit(main())
 
+def create_backtest_registry() -> BacktestRegistry:
+    app_registry = BacktestRegistry()
+
+    app_registry.register(
+        "Optimize Macro Regime Thresholds",
+        backtest_optimize_macro_regime_thresholds,
+    )
+    app_registry.register(
+        "Optimize Entry Threshold Fine",
+        backtest_optimize_entry_threshold_fine,
+    )
+    app_registry.register("Macro Entry Impact", backtest_macro_entry_impact)
+    app_registry.register(
+        "Macro Variable Event Sensitivity",
+        backtest_macro_variable_event_sensitivity,
+    )
+    app_registry.register("FX Trend Vol Regime", backtest_fx_trend_vol_regime)
+    app_registry.register(
+        "FX Regime Event Sensitivity",
+        backtest_fx_regime_event_sensitivity,
+    )
+    app_registry.register("FX Forward Returns", backtest_fx_forward_returns)
+    app_registry.register(
+        "Real Rate Trade by FX Regime",
+        backtest_realrate_trade_by_fx_regime,
+    )
+    app_registry.register(
+        "Real Rate Trade by FX Regime Detail",
+        backtest_realrate_trade_fx_regime_detail,
+    )
+    app_registry.register(
+        "Real Rate Signal Validity by FX Regime",
+        backtest_realrate_signal_validity_by_fx_regime,
+    )
+    return app_registry
 
 def load_data(csv_path: Path) -> pd.DataFrame:
     if not csv_path.exists():
@@ -670,3 +691,6 @@ def plot_series(daily: pd.DataFrame) -> None:
     print("Use as setas ← e → para alternar entre as views.")
     draw_current_view()
     plt.show()
+
+if __name__ == "__main__":
+    raise SystemExit(main())
