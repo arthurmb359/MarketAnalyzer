@@ -20,44 +20,6 @@ def _load_macro_frame() -> pd.DataFrame:
     df = df.sort_values("data").reset_index(drop=True)
     return df
 
-
-def _find_stress_periods(df: pd.DataFrame) -> list[dict]:
-    """
-    Detecta blocos contínuos de regime 'stress' usando macro_regime_label.
-    """
-    work = df.dropna(subset=["macro_regime_label"]).copy()
-    work = work.sort_values("data").reset_index(drop=True)
-
-    is_stress = work["macro_regime_label"] == "stress"
-    prev = is_stress.shift(1, fill_value=False)
-
-    starts = work.index[is_stress & (~prev)].tolist()
-
-    periods: list[dict] = []
-
-    for start_idx in starts:
-        start_date = work.loc[start_idx, "data"]
-
-        end_idx = start_idx
-        while (
-            end_idx + 1 < len(work)
-            and work.loc[end_idx + 1, "macro_regime_label"] == "stress"
-        ):
-            end_idx += 1
-
-        end_date = work.loc[end_idx, "data"]
-        duration_days = (end_date - start_date).days + 1
-
-        periods.append({
-            "start_idx": start_idx,
-            "end_idx": end_idx,
-            "start_date": start_date,
-            "end_date": end_date,
-            "duration_days": duration_days,
-        })
-
-    return periods
-
 def _build_research_frame(duration_minima: float = 0.0):
     from macro.macro_features import (
         build_daily_macro_frame,
