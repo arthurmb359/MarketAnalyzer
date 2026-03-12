@@ -3,51 +3,52 @@ from __future__ import annotations
 from matplotlib import lines
 import pandas as pd
 
-from macro.macro_features import (
-    build_daily_macro_frame,
-    add_macro_features,
-    add_macro_regime_score,
-)
+from backtest.ipca_series import *
 
+def _load_fx_base_frame() -> pd.DataFrame:
+    """
+    Carrega apenas a base cambial mínima necessária
+    para construir o FX Macro Regime Model.
 
-def _load_macro_frame() -> pd.DataFrame:
-    df = build_daily_macro_frame()
-    df = add_macro_features(df)
-    df = add_macro_regime_score(df)
-    
-    # manter apenas período moderno 2000 em diante, para evitar distorções por dados antigos e esparsos
+    Requer colunas:
+    - data
+    - usdbrl
+    """
+    import pandas as pd
+
+    # AJUSTE ESTE IMPORT para o loader real do seu projeto
+
+    df = load_ipca_long_series().copy()
+
+    required = {"data", "usdbrl"}
+    missing = required - set(df.columns)
+    if missing:
+        raise ValueError(
+            f"Base FX não possui as colunas esperadas. Faltando: {sorted(missing)}"
+        )
+
+    df["data"] = pd.to_datetime(df["data"], errors="coerce")
+    df["usdbrl"] = pd.to_numeric(df["usdbrl"], errors="coerce")
+
+    df = df.dropna(subset=["data", "usdbrl"]).copy()
     df = df[df["data"] >= pd.Timestamp("2000-01-01")].copy()
     df = df.sort_values("data").reset_index(drop=True)
+
+    if df.empty:
+        raise ValueError("Base FX ficou vazia após limpeza.")
+
     return df
 
 def _build_research_frame(duration_minima: float = 0.0):
-    from macro.macro_features import (
-        build_daily_macro_frame,
-        add_macro_features,
-        add_macro_regime_score,
-    )
+    """
+    Builder principal do projeto atual.
+    Retorna apenas a série de real rate / IPCA+ longa.
+    Sem merge com macro legado.
+    """
     from backtest.ipca_series import load_ipca_long_series
-    import pandas as pd
 
-    price_df = load_ipca_long_series(duration_minima=duration_minima)
-    price_df = price_df.sort_values("data").reset_index(drop=True)
-
-    macro_df = build_daily_macro_frame()
-    macro_df = add_macro_features(macro_df)
-    macro_df = add_macro_regime_score(macro_df)
-    macro_df = macro_df.sort_values("data").reset_index(drop=True)
-
-    # merge temporal robusto
-    df = pd.merge_asof(
-        price_df,
-        macro_df[["data", "macro_regime_label", "macro_score_smooth"]],
-        on="data",
-        direction="backward",
-    )
-
-    # normaliza faltantes
-    df["macro_regime_label"] = df["macro_regime_label"].fillna("indefinido")
-
+    df = load_ipca_long_series(duration_minima=duration_minima)
+    df = df.sort_values("data").reset_index(drop=True)
     return df
 
 def _classify_macro_regime_from_thresholds(
@@ -254,90 +255,6 @@ def _compute_macro_threshold_score(
         "avg_duration": avg_duration,
         "transitions": int(transitions),
     }
-
-
-def backtest_optimize_macro_regime_thresholds() -> str:
-    df = _load_macro_frame()
-    df = df[df["data"] >= pd.Timestamp("2000-01-01")].copy()
-    df = df.sort_values("data").reset_index(drop=True)
-
-    known_event_dates = [
-        "2002-07-01",
-        "2008-09-15",
-        "2013-05-22",
-        "2015-07-01",
-        "2018-05-20",
-        "2020-03-15",
-        "2021-10-01",
-        "2024-11-01",
-    ]
-
-    low_grid = [0.60, 0.70, 0.80, 0.90, 1.00]
-    high_grid = [1.20, 1.30, 1.40, 1.50, 1.60, 1.70, 1.80]
-
-    results = []
-
-    for low_thr in low_grid:
-        for high_thr in high_grid:
-            if high_thr <= low_thr:
-                continue
-
-            result = _compute_macro_threshold_score(
-                df=df,
-                low_thr=low_thr,
-                high_thr=high_thr,
-                known_event_dates=known_event_dates,
-            )
-            results.append(result)
-
-    results = sorted(results, key=lambda x: x["score"], reverse=True)
-
-    lines: list[str] = []
-    lines.append("=== OTIMIZAÇÃO DOS THRESHOLDS DO MACRO REGIME ===")
-    lines.append("")
-    lines.append("Objetivo: encaixar os regimes macro nas datas históricas conhecidas")
-    lines.append("")
-    lines.append("Eventos históricos usados:")
-    for d in known_event_dates:
-        lines.append(f"- {d}")
-    lines.append("")
-
-    lines.append("=== TOP 10 COMBINAÇÕES ===")
-    for r in results[:10]:
-        lines.append(
-            f"low={r['low_thr']:.2f} | "
-            f"high={r['high_thr']:.2f} | "
-            f"score={r['score']:.2f} | "
-            f"matched={r['matched_events']} | "
-            f"stress_hits={r['stress_hits']} | "
-            f"alert_hits={r['alert_hits']} | "
-            f"false_alerts={r['false_alerts']} | "
-            f"false_stress={r['false_stress']} | "
-            f"short_alerts={r['short_alerts']} | "
-            f"short_stress={r['short_stress']} | "
-            f"avg_duration={r['avg_duration']:.1f} | "
-            f"transitions={r['transitions']}"
-        )
-
-    best = results[0]
-
-    lines.append("")
-    lines.append("=== MELHOR COMBINAÇÃO ===")
-    lines.append(f"normal < {best['low_thr']:.2f}")
-    lines.append(f"alerta >= {best['low_thr']:.2f} e < {best['high_thr']:.2f}")
-    lines.append(f"stress >= {best['high_thr']:.2f}")
-    lines.append(f"score total = {best['score']:.2f}")
-    lines.append(f"eventos encaixados = {best['matched_events']}")
-    lines.append(f"stress hits = {best['stress_hits']}")
-    lines.append(f"alert hits = {best['alert_hits']}")
-    lines.append(f"false alerts = {best['false_alerts']}")
-    lines.append(f"false stress = {best['false_stress']}")
-    lines.append(f"duração média dos regimes = {best['avg_duration']:.1f} dias")
-    lines.append(f"número de transições = {best['transitions']}")
-    lines.append(f"short alerts = {best['short_alerts']}")
-    lines.append(f"short stress = {best['short_stress']}")
-
-    return "\n".join(lines)
 
 def _run_real_rate_scaled_once(
     z_entry_threshold: float,
@@ -645,107 +562,6 @@ def backtest_optimize_entry_threshold_fine() -> str:
 
     return "\n".join(lines)
 
-def backtest_macro_entry_impact() -> str:
-    import numpy as np
-    from collections import defaultdict
-
-    z_entry = 1.5
-    duration_minima = 15
-    exit_threshold = -2.0
-
-    tiers = [
-        (1.5, 1.0),
-        (2.0, 1.5),
-        (2.5, 2.0),
-        (3.0, 3.0),
-    ]
-
-    result = _run_real_rate_scaled_once(
-        z_entry_threshold=z_entry,
-        duration_minima=duration_minima,
-        exit_threshold=exit_threshold,
-        tiers=tiers,
-    )
-
-    trades = result.get("completed_trades", [])
-
-    print("DEBUG regimes nos trades:")
-    for t in trades:
-        print(
-            t.get("entry_date"),
-            t.get("entry_macro_regime"),
-            t.get("return_pct")
-        )
-
-    lines = []
-    lines.append("=== IMPACTO DO REGIME MACRO NA ENTRADA ===")
-    lines.append("")
-    lines.append(f"Entrada: z >= {z_entry}")
-    lines.append(f"Saída: z <= {exit_threshold}")
-    lines.append(f"duration_minima: {duration_minima}")
-    lines.append("Escalonamento: 1.0 / 1.5 / 2.0 / 3.0")
-    lines.append("")
-
-    if not trades:
-        lines.append("Nenhum trade encontrado.")
-        return "\n".join(lines)
-
-    grouped = defaultdict(list)
-
-    for t in trades:
-        regime = t.get("entry_macro_regime", "unknown")
-        grouped[regime].append(t)
-
-    lines.append("=== RESULTADOS POR REGIME ===")
-
-    total_abs = 0
-
-    for regime in ["normal", "alerta", "stress"]:
-
-        g = grouped.get(regime, [])
-
-        if not g:
-            lines.append(f"\n[{regime}] sem trades")
-            continue
-
-        returns = np.array([t["return_pct"] for t in g])
-        abs_pnl = np.array([t["absolute_pnl_units"] for t in g])
-        mtm = np.array([t["mtm_pct"] for t in g])
-        carry = np.array([t["carry_pct"] for t in g])
-        holding = np.array([t["holding_bars"] for t in g])
-        weights = np.array([t["total_weight"] for t in g])
-
-        total_abs += abs_pnl.sum()
-
-        lines.append(f"\n[{regime}]")
-        lines.append(f"Trades: {len(g)}")
-        lines.append(f"Ganho absoluto total: {abs_pnl.sum():.2f}")
-        lines.append(f"Ganho absoluto médio: {abs_pnl.mean():.2f}")
-        lines.append(f"Retorno médio: {returns.mean():.2f}%")
-        lines.append(f"Mediana: {np.median(returns):.2f}%")
-        lines.append(f"Win rate: {(returns > 0).mean()*100:.1f}%")
-        lines.append(f"MTM médio: {mtm.mean():.2f}%")
-        lines.append(f"Carry médio: {carry.mean():.2f}%")
-        lines.append(f"Holding médio: {holding.mean():.1f} dias")
-        lines.append(f"Peso médio: {weights.mean():.2f}x")
-
-    lines.append("")
-    lines.append("=== PARTICIPAÇÃO NO PnL TOTAL ===")
-
-    for regime in ["normal", "alerta", "stress"]:
-
-        g = grouped.get(regime, [])
-
-        if not g:
-            continue
-
-        abs_pnl = np.array([t["absolute_pnl_units"] for t in g])
-        share = abs_pnl.sum() / total_abs * 100
-
-        lines.append(f"{regime}: {share:.1f}% do lucro total")
-
-    return "\n".join(lines)
-
 
 def _approx_duration_from_prazo(prazo_anos: float) -> float:
     """
@@ -815,200 +631,19 @@ def _total_real_return_components(
 
     return total_dec * 100.0, mtm_dec * 100.0, carry_dec * 100.0
 
-def backtest_macro_variable_event_sensitivity() -> str:
-    import numpy as np
+def _build_fx_regime_frame() -> pd.DataFrame:
+    """
+    Builder atual do FX Macro Regime Model.
+    Usa apenas USD/BRL e constrói:
+    - tendências 21d / 63d / 126d
+    - volatilidade 21d
+    - thresholds rolling p80
+    - aceleração cambial
+    - regime final suavizado
+    """
     import pandas as pd
 
-    df = _load_macro_frame()
-    df = df[df["data"] >= pd.Timestamp("2000-01-01")].copy()
-    df = df.sort_values("data").reset_index(drop=True)
-
-    known_event_dates = pd.to_datetime([
-        "2002-07-01",
-        "2008-09-15",
-        "2013-05-22",
-        "2015-07-01",
-        "2018-05-20",
-        "2020-03-15",
-        "2021-10-01",
-        "2024-11-01",
-    ])
-
-    # variáveis que queremos testar
-    variable_specs = {
-        "ipca_12m": {
-            "label": "IPCA 12m",
-            "mode": "diff",   # diferença absoluta
-            "expected_direction": "up",
-        },
-        "dbgg_12m_diff": {
-            "label": "DBGG 12m diff",
-            "mode": "diff",
-            "expected_direction": "up",
-        },
-        "usdbrl_stress": {
-            "label": "USD/BRL stress",
-            "mode": "diff",
-            "expected_direction": "up",
-        },
-        "usdbrl_63d_change": {
-            "label": "USD/BRL 63d change",
-            "mode": "diff",
-            "expected_direction": "up",
-        },
-    }
-
-    windows = [30, 60, 90, 180]
-
-    lines: list[str] = []
-    lines.append("=== SENSIBILIDADE DAS VARIÁVEIS MACRO ANTES DOS EVENTOS ===")
-    lines.append("")
-    lines.append("Objetivo: verificar se as variáveis já se movem ANTES dos eventos de regime.")
-    lines.append("")
-
-    all_results = {}
-
-    for var, spec in variable_specs.items():
-        if var not in df.columns:
-            lines.append(f"[ERRO] Coluna ausente: {var}")
-            lines.append("")
-            continue
-
-        lines.append(f"=== VARIÁVEL: {spec['label']} ({var}) ===")
-
-        per_window_results = {}
-
-        for window in windows:
-            changes = []
-            directional_hits = 0
-            usable_events = 0
-
-            lines.append(f"-- Janela pré-evento: {window} dias --")
-
-            for event_date in known_event_dates:
-                event_rows = df[df["data"] <= event_date]
-                if event_rows.empty:
-                    lines.append(f"{event_date.date()} | sem dados até a data do evento")
-                    continue
-
-                event_idx = event_rows.index[-1]
-                start_idx = event_idx - window
-
-                if start_idx < 0:
-                    lines.append(f"{event_date.date()} | janela insuficiente")
-                    continue
-
-                start_value = df.loc[start_idx, var]
-                end_value = df.loc[event_idx, var]
-
-                if pd.isna(start_value) or pd.isna(end_value):
-                    lines.append(f"{event_date.date()} | valores ausentes")
-                    continue
-
-                change = end_value - start_value
-                changes.append(change)
-                usable_events += 1
-
-                if spec["expected_direction"] == "up" and change > 0:
-                    directional_hits += 1
-                elif spec["expected_direction"] == "down" and change < 0:
-                    directional_hits += 1
-
-                lines.append(
-                    f"{event_date.date()} | início={start_value:.4f} | "
-                    f"fim={end_value:.4f} | delta={change:.4f}"
-                )
-
-            if usable_events > 0:
-                arr = np.array(changes, dtype=float)
-                per_window_results[window] = {
-                    "mean": float(arr.mean()),
-                    "median": float(np.median(arr)),
-                    "hit_rate": directional_hits / usable_events * 100.0,
-                    "usable_events": usable_events,
-                }
-
-                lines.append(
-                    f"Resumo {window}d | "
-                    f"média={arr.mean():.4f} | "
-                    f"mediana={np.median(arr):.4f} | "
-                    f"acertos direção={directional_hits}/{usable_events} "
-                    f"({directional_hits / usable_events * 100.0:.1f}%)"
-                )
-            else:
-                per_window_results[window] = None
-                lines.append(f"Resumo {window}d | sem eventos utilizáveis")
-
-            lines.append("")
-
-        all_results[var] = {
-            "label": spec["label"],
-            "per_window": per_window_results,
-        }
-
-    # ranking simples por poder preditivo pré-evento
-    lines.append("=== RANKING SIMPLES DAS VARIÁVEIS ===")
-    lines.append("Critério: melhor hit rate médio nas janelas pré-evento.")
-    ranking = []
-
-    for var, res in all_results.items():
-        hit_rates = []
-        for window in windows:
-            row = res["per_window"].get(window)
-            if row is not None:
-                hit_rates.append(row["hit_rate"])
-
-        if hit_rates:
-            ranking.append((var, res["label"], float(np.mean(hit_rates))))
-
-    ranking = sorted(ranking, key=lambda x: x[2], reverse=True)
-
-    for var, label, avg_hit in ranking:
-        lines.append(f"{label} ({var}) | hit rate médio = {avg_hit:.1f}%")
-
-    lines.append("")
-    lines.append("=== MATRIZ DE CORRELAÇÃO ===")
-
-    corr_cols = [c for c in variable_specs.keys() if c in df.columns]
-    corr_df = df[corr_cols].copy().dropna()
-
-    if len(corr_df) >= 10:
-        corr = corr_df.corr()
-
-        for row_var in corr.index:
-            row_text = [row_var]
-            for col_var in corr.columns:
-                row_text.append(f"{corr.loc[row_var, col_var]:.2f}")
-            lines.append(" | ".join(row_text))
-
-        lines.append("")
-        lines.append("=== ALERTAS DE REDUNDÂNCIA ===")
-        threshold = 0.80
-        found_redundancy = False
-
-        for i, c1 in enumerate(corr.columns):
-            for j, c2 in enumerate(corr.columns):
-                if j <= i:
-                    continue
-                value = corr.loc[c1, c2]
-                if abs(value) >= threshold:
-                    found_redundancy = True
-                    lines.append(
-                        f"{c1} vs {c2} | correlação={value:.2f} "
-                        f"| possível redundância"
-                    )
-
-        if not found_redundancy:
-            lines.append("Nenhuma redundância forte detectada com |corr| >= 0.80.")
-    else:
-        lines.append("Dados insuficientes para correlação.")
-
-    return "\n".join(lines)
-
-def _build_fx_regime_frame():
-    import pandas as pd
-
-    df = _load_macro_frame().copy()
+    df = _load_fx_base_frame().copy()
     df = df.sort_values("data").reset_index(drop=True)
 
     # retorno diário
@@ -1029,19 +664,19 @@ def _build_fx_regime_frame():
     # aceleração cambial:
     # curto > médio > longo e todos positivos
     df["usd_trend_accel"] = (
-        (df["usd_trend_21d"] > 0) &
-        (df["usd_trend_63d"] > 0) &
-        (df["usd_trend_126d"] > 0) &
-        (df["usd_trend_21d"] > df["usd_trend_63d"]) &
-        (df["usd_trend_63d"] > df["usd_trend_126d"])
+        (df["usd_trend_21d"] > 0)
+        & (df["usd_trend_63d"] > 0)
+        & (df["usd_trend_126d"] > 0)
+        & (df["usd_trend_21d"] > df["usd_trend_63d"])
+        & (df["usd_trend_63d"] > df["usd_trend_126d"])
     )
 
     def classify_fx_regime(row):
         if (
-            pd.isna(row["usd_vol_21d"]) or
-            pd.isna(row["usd_vol_p80"]) or
-            pd.isna(row["usd_trend_63d"]) or
-            pd.isna(row["usd_trend_63d_p80"])
+            pd.isna(row["usd_vol_21d"])
+            or pd.isna(row["usd_vol_p80"])
+            or pd.isna(row["usd_trend_63d"])
+            or pd.isna(row["usd_trend_63d_p80"])
         ):
             return "indefinido"
 
@@ -1572,5 +1207,467 @@ def backtest_realrate_signal_validity_by_fx_regime(
                 f"mediana: {median_move:+.3f} | "
                 f"reversão (queda da taxa): {reversion_hit:5.1f}%"
             )
+
+    return "\n".join(lines)
+
+def backtest_realrate_non_optimal_entry_plan() -> str:
+    """
+    Mesmo backtest do plano não ótimo,
+    mas agora reporta o drawdown máximo do trade.
+
+    Plano:
+    entrada: 100k
+    +100k se z252 >= 1.0
+    +150k se z252 >= 1.7
+    +150k se z252 >= 2.3
+    saída: z252 <= -2.0
+
+    Apenas após pico recente:
+    max(z252 últimos 504 dias) >= 1.7
+    """
+
+    import pandas as pd
+
+    df = _build_research_frame(duration_minima=0.0).copy()
+    df = df.sort_values("data").reset_index(drop=True)
+
+    def build_zscore(window: int):
+        mean = df["taxa_media"].rolling(window, min_periods=60).mean()
+        std = df["taxa_media"].rolling(window, min_periods=60).std()
+        return (df["taxa_media"] - mean) / std
+
+    df["z_252"] = build_zscore(252)
+    df["z_1260"] = build_zscore(1260)
+
+    df["z252_peak_recent"] = df["z_252"].rolling(504, min_periods=100).max()
+    df["post_stress_cycle"] = df["z252_peak_recent"] >= 1.7
+
+    df["current_like_state"] = (
+        df["z_252"].between(-0.25, 0.25)
+        & df["z_1260"].between(0.90, 1.30)
+        & df["post_stress_cycle"]
+    )
+
+    prev = df["current_like_state"].shift(1, fill_value=False)
+    df["event"] = df["current_like_state"] & (~prev)
+
+    trades = []
+
+    for i, row in df.iterrows():
+
+        if not row["event"]:
+            continue
+
+        entry_rate = row["taxa_media"]
+        entry_date = row["data"]
+
+        allocations = [
+            (100_000, entry_rate)
+        ]
+
+        total_alloc = 100_000
+
+        ap2 = ap3 = ap4 = False
+
+        max_dd_rate = 0.0
+        max_dd_pnl = 0.0
+        dd_day = None
+
+        for j in range(i + 1, len(df)):
+
+            rate = df.loc[j, "taxa_media"]
+            z = df.loc[j, "z_252"]
+
+            if pd.isna(z):
+                continue
+
+            # aportes
+            if (not ap2) and z >= 1.0:
+                allocations.append((100_000, rate))
+                total_alloc += 100_000
+                ap2 = True
+
+            if (not ap3) and z >= 1.7:
+                allocations.append((150_000, rate))
+                total_alloc += 150_000
+                ap3 = True
+
+            if (not ap4) and z >= 2.3:
+                allocations.append((150_000, rate))
+                total_alloc += 150_000
+                ap4 = True
+
+            # pnl mark-to-market
+            pnl = 0
+            for capital, r in allocations:
+                pnl += capital * (r - rate)
+
+            # drawdown
+            if pnl < max_dd_pnl:
+                max_dd_pnl = pnl
+                max_dd_rate = rate - entry_rate
+                dd_day = df.loc[j, "data"]
+
+            # saída
+            if z <= -2.0:
+
+                exit_rate = rate
+                exit_date = df.loc[j, "data"]
+
+                final_pnl = 0
+                for capital, r in allocations:
+                    final_pnl += capital * (r - exit_rate)
+
+                trades.append({
+                    "entry": entry_date,
+                    "exit": exit_date,
+                    "alloc": total_alloc,
+                    "pnl": final_pnl,
+                    "max_dd_pnl": max_dd_pnl,
+                    "max_dd_rate": max_dd_rate,
+                    "dd_day": dd_day
+                })
+
+                break
+
+    import pandas as pd
+    t = pd.DataFrame(trades)
+
+    lines = []
+    lines.append("=== REAL RATE NON-OPTIMAL ENTRY PLAN ===")
+    lines.append("")
+    lines.append("Agora com cálculo de drawdown máximo")
+    lines.append("")
+
+    if t.empty:
+        lines.append("Nenhum trade encontrado.")
+        return "\n".join(lines)
+
+    lines.append("=== RESUMO ===")
+    lines.append(f"trades={len(t)}")
+    lines.append(f"pnl médio={t.pnl.mean():,.2f}")
+    lines.append(f"pior drawdown médio={t.max_dd_pnl.mean():,.2f}")
+    lines.append(f"pior drawdown absoluto={t.max_dd_pnl.min():,.2f}")
+    lines.append("")
+
+    lines.append("=== DETALHE ===")
+
+    for _, r in t.iterrows():
+        entry_txt = r["entry"].strftime("%d/%m/%Y") if pd.notna(r["entry"]) else "NaT"
+        exit_txt = r["exit"].strftime("%d/%m/%Y") if pd.notna(r["exit"]) else "NaT"
+        dd_day_txt = r["dd_day"].strftime("%d/%m/%Y") if pd.notna(r["dd_day"]) else "n/a"
+
+        lines.append(
+            f"{entry_txt} -> {exit_txt} | "
+            f"PnL={r['pnl']:,.2f} | "
+            f"maxDD={r['max_dd_pnl']:,.2f} | "
+            f"DD_day={dd_day_txt}"
+        )
+
+    return "\n".join(lines)
+
+def backtest_realrate_state_of_art() -> str:
+    """
+    Estado da arte atual do sistema Real Rate - versão defensiva
+    com leitura de drawdown mais adequada para IPCA+ em carregamento.
+
+    Modo operacional:
+    - entrada no INÍCIO do stress
+    - evento = primeiro cruzamento de z_252 >= 1.7
+
+    Peso inicial:
+    - 1.0x se z_1260 < 1.2
+    - 1.5x se z_1260 >= 1.2
+
+    Escalonamento tático defensivo:
+    - z_252 >= 2.0 -> +0.5x
+    - z_252 >= 2.5 -> +1.0x
+    - z_252 >= 3.0 -> +1.5x
+
+    Peso máximo efetivo:
+    - 4.5x
+
+    Saída:
+    - z_252 <= -2.0
+    - duration_minima = 15
+
+    Métricas de stress:
+    - maxDD_MTM: drawdown mark-to-market simplificado
+    - carry_proxy_anual: proxy conservador de carry anual
+    - anos_para_recuperar_dd: quantos anos de carry seriam necessários
+      para compensar o pior drawdown
+    """
+
+    import math
+    import pandas as pd
+
+    df = _build_research_frame(duration_minima=0.0).copy()
+    df = (
+        df.dropna(subset=["data", "taxa_media"])
+        .sort_values("data")
+        .reset_index(drop=True)
+    )
+
+    entry_threshold_252 = 1.7
+    entry_threshold_1260_overlay = 1.2
+    exit_threshold = -2.0
+    duration_minima = 15
+    base_notional = 100.0
+
+    # fração conservadora da taxa real usada como carry aproveitável
+    carry_proxy_fraction = 0.30
+
+    def build_zscore(window: int) -> pd.Series:
+        min_periods = max(60, int(window * 0.25))
+
+        rolling_mean = df["taxa_media"].rolling(
+            window=window,
+            min_periods=min_periods,
+        ).mean()
+
+        rolling_std = df["taxa_media"].rolling(
+            window=window,
+            min_periods=min_periods,
+        ).std()
+
+        return (df["taxa_media"] - rolling_mean) / rolling_std
+
+    def base_entry_weight(z1260: float) -> float:
+        return 1.5 if (pd.notna(z1260) and z1260 >= entry_threshold_1260_overlay) else 1.0
+
+    df["z_252"] = build_zscore(252)
+    df["z_1260"] = build_zscore(1260)
+
+    # entrada = primeiro cruzamento do stress
+    df["entry_signal_raw"] = df["z_252"] >= entry_threshold_252
+    prev_signal = df["entry_signal_raw"].shift(1, fill_value=False)
+    df["entry_event"] = df["entry_signal_raw"] & (~prev_signal)
+
+    trades = []
+
+    in_trade = False
+    entry_idx = None
+    entry_date = None
+    entry_rate = None
+    entry_z252 = None
+    entry_z1260 = None
+    entry_weight = None
+
+    current_weight = None
+    worst_mtm_pnl = None
+    worst_mtm_date = None
+    worst_mtm_rate = None
+    weight_at_dd = None
+
+    add_20_done = False
+    add_25_done = False
+    add_30_done = False
+
+    for i, row in df.iterrows():
+        z252 = row["z_252"]
+        z1260 = row["z_1260"]
+        rate = float(row["taxa_media"])
+        dt = row["data"]
+
+        if not in_trade:
+            if bool(row["entry_event"]):
+                weight = base_entry_weight(z1260)
+
+                in_trade = True
+                entry_idx = i
+                entry_date = dt
+                entry_rate = rate
+                entry_z252 = float(z252)
+                entry_z1260 = float(z1260) if pd.notna(z1260) else None
+                entry_weight = weight
+
+                current_weight = weight
+                add_20_done = False
+                add_25_done = False
+                add_30_done = False
+
+                worst_mtm_pnl = 0.0
+                worst_mtm_date = None
+                worst_mtm_rate = entry_rate
+                weight_at_dd = current_weight
+
+        else:
+            holding_days = i - entry_idx
+
+            # escalonamento progressivo defensivo
+            new_weight = current_weight
+
+            if (not add_20_done) and pd.notna(z252) and z252 >= 2.0:
+                new_weight += 0.5
+                add_20_done = True
+
+            if (not add_25_done) and pd.notna(z252) and z252 >= 2.5:
+                new_weight += 1.0
+                add_25_done = True
+
+            if (not add_30_done) and pd.notna(z252) and z252 >= 3.0:
+                new_weight += 1.5
+                add_30_done = True
+
+            current_weight = min(new_weight, 4.5)
+
+            # MTM simplificado usando peso corrente
+            mtm_pnl = base_notional * current_weight * (entry_rate - rate)
+
+            if mtm_pnl < worst_mtm_pnl:
+                worst_mtm_pnl = mtm_pnl
+                worst_mtm_date = dt
+                worst_mtm_rate = rate
+                weight_at_dd = current_weight
+
+            if pd.notna(z252) and holding_days >= duration_minima and z252 <= exit_threshold:
+                exit_rate = rate
+                rate_move = entry_rate - exit_rate
+                score = base_notional * current_weight * rate_move
+
+                # carry proxy anual no ponto do DD
+                carry_proxy_anual = (
+                    base_notional
+                    * (weight_at_dd if weight_at_dd is not None else current_weight)
+                    * entry_rate
+                    * carry_proxy_fraction
+                )
+
+                if carry_proxy_anual > 0:
+                    anos_para_recuperar_dd = abs(worst_mtm_pnl) / carry_proxy_anual
+                else:
+                    anos_para_recuperar_dd = math.nan
+
+                trades.append(
+                    {
+                        "entry_date": entry_date,
+                        "exit_date": dt,
+                        "entry_rate": entry_rate,
+                        "exit_rate": exit_rate,
+                        "entry_z252": entry_z252,
+                        "entry_z1260": entry_z1260,
+                        "entry_weight": entry_weight,
+                        "exit_weight": current_weight,
+                        "exit_z252": float(z252),
+                        "holding_days": int(holding_days),
+                        "rate_move": float(rate_move),
+                        "score": float(score),
+                        "max_drawdown_score": float(worst_mtm_pnl),
+                        "max_drawdown_date": worst_mtm_date,
+                        "max_drawdown_rate": float(worst_mtm_rate - entry_rate) if worst_mtm_date is not None else 0.0,
+                        "weight_at_dd": float(weight_at_dd) if weight_at_dd is not None else 0.0,
+                        "carry_proxy_anual": float(carry_proxy_anual),
+                        "anos_para_recuperar_dd": float(anos_para_recuperar_dd) if not math.isnan(anos_para_recuperar_dd) else None,
+                        "hit_20": add_20_done,
+                        "hit_25": add_25_done,
+                        "hit_30": add_30_done,
+                    }
+                )
+
+                in_trade = False
+                entry_idx = None
+                entry_date = None
+                entry_rate = None
+                entry_z252 = None
+                entry_z1260 = None
+                entry_weight = None
+                current_weight = None
+                worst_mtm_pnl = None
+                worst_mtm_date = None
+                worst_mtm_rate = None
+                weight_at_dd = None
+                add_20_done = False
+                add_25_done = False
+                add_30_done = False
+
+    lines = []
+    lines.append("=== REAL RATE STATE OF ART ===")
+    lines.append("")
+    lines.append("Regras do sistema:")
+    lines.append(f"Entrada: primeiro cruzamento de z_252 >= {entry_threshold_252:.1f}")
+    lines.append(f"Peso inicial: 1.0x se z_1260 < {entry_threshold_1260_overlay:.1f}")
+    lines.append(f"Peso inicial: 1.5x se z_1260 >= {entry_threshold_1260_overlay:.1f}")
+    lines.append("Escalonamento tático defensivo:")
+    lines.append("z_252 >= 2.0 -> +0.5x")
+    lines.append("z_252 >= 2.5 -> +1.0x")
+    lines.append("z_252 >= 3.0 -> +1.5x")
+    lines.append(f"Saída: z_252 <= {exit_threshold:.1f}")
+    lines.append(f"Duração mínima: {duration_minima} dias")
+    lines.append("")
+    lines.append("Stress econômico aproximado:")
+    lines.append(f"carry_proxy_anual = {carry_proxy_fraction:.0%} da taxa real de entrada")
+    lines.append("anos_para_recuperar_dd = abs(maxDD_MTM) / carry_proxy_anual")
+    lines.append("")
+
+    if not trades:
+        lines.append("Nenhum trade encontrado.")
+        return "\n".join(lines)
+
+    trades_df = pd.DataFrame(trades)
+
+    win_rate = (trades_df["score"] > 0).mean() * 100.0
+    rate_move_mean = trades_df["rate_move"].mean()
+    rate_move_median = trades_df["rate_move"].median()
+    score_total = trades_df["score"].sum()
+    score_mean = trades_df["score"].mean()
+    holding_mean = trades_df["holding_days"].mean()
+    entry_weight_mean = trades_df["entry_weight"].mean()
+    exit_weight_mean = trades_df["exit_weight"].mean()
+
+    dd_mean = trades_df["max_drawdown_score"].mean()
+    dd_worst = trades_df["max_drawdown_score"].min()
+
+    carry_proxy_mean = trades_df["carry_proxy_anual"].mean()
+    recovery_years_mean = trades_df["anos_para_recuperar_dd"].dropna().mean()
+    recovery_years_worst = trades_df["anos_para_recuperar_dd"].dropna().max()
+
+    lines.append("=== RESUMO ===")
+    lines.append(f"trades={len(trades_df)}")
+    lines.append(f"win={win_rate:.1f}%")
+    lines.append(f"rate_move_médio={rate_move_mean:.4f}")
+    lines.append(f"rate_move_mediana={rate_move_median:.4f}")
+    lines.append(f"score_médio={score_mean:.2f}")
+    lines.append(f"score_total={score_total:.2f}")
+    lines.append(f"holding_médio={holding_mean:.1f}d")
+    lines.append(f"peso_inicial_médio={entry_weight_mean:.2f}x")
+    lines.append(f"peso_final_médio={exit_weight_mean:.2f}x")
+    lines.append(f"drawdown_médio_mark_to_market={dd_mean:.2f}")
+    lines.append(f"pior_drawdown_mark_to_market={dd_worst:.2f}")
+    lines.append(f"carry_proxy_anual_médio={carry_proxy_mean:.2f}")
+    lines.append(f"anos_médios_para_recuperar_dd={recovery_years_mean:.2f}")
+    lines.append(f"pior_caso_anos_para_recuperar_dd={recovery_years_worst:.2f}")
+    lines.append("")
+
+    lines.append("=== DETALHE DOS TRADES ===")
+    for _, row in trades_df.iterrows():
+        z1260_txt = "nan" if pd.isna(row["entry_z1260"]) else f"{row['entry_z1260']:.2f}"
+        dd_date_txt = (
+            row["max_drawdown_date"].strftime("%d/%m/%Y")
+            if pd.notna(row["max_drawdown_date"])
+            else "n/a"
+        )
+        years_txt = (
+            f"{row['anos_para_recuperar_dd']:.2f}"
+            if pd.notna(row["anos_para_recuperar_dd"])
+            else "n/a"
+        )
+
+        lines.append(
+            f"{row['entry_date'].strftime('%d/%m/%Y')} -> {row['exit_date'].strftime('%d/%m/%Y')} | "
+            f"z252={row['entry_z252']:.2f} | "
+            f"z1260={z1260_txt} | "
+            f"peso_in={row['entry_weight']:.2f}x | "
+            f"peso_out={row['exit_weight']:.2f}x | "
+            f"hit2.0={'Y' if row['hit_20'] else 'N'} | "
+            f"hit2.5={'Y' if row['hit_25'] else 'N'} | "
+            f"hit3.0={'Y' if row['hit_30'] else 'N'} | "
+            f"rate_move={row['rate_move']:+.4f} | "
+            f"score={row['score']:.2f} | "
+            f"maxDD_MTM={row['max_drawdown_score']:.2f} | "
+            f"carry_proxy_anual={row['carry_proxy_anual']:.2f} | "
+            f"anos_recuperar_dd={years_txt} | "
+            f"DD_day={dd_date_txt} | "
+            f"holding={row['holding_days']}d"
+        )
 
     return "\n".join(lines)

@@ -236,7 +236,7 @@ class MarketAnalyzerWindow:
             self._plot_series_column("taxa_media", x, "Daily average rate", linewidth=1.5)
             self._plot_series_column("media_historica", x, "Historical mean", linestyle="--", linewidth=1.2)
             self._plot_series_column("media_rolling_252d", x, "Rolling mean 252d", linewidth=1.2)
-            self._plot_series_column("mm_756", x, "Moving avg 756d", linewidth=1.0)
+            self._plot_series_column("mm_1260", x, "Moving avg 1260d", linewidth=1.0)
             self._plot_series_column("banda_1dp_sup", x, "+1 std", linestyle=":", linewidth=1.0)
             self._plot_series_column("banda_1dp_inf", x, "-1 std", linestyle=":", linewidth=1.0)
             self._plot_series_column("banda_2dp_sup", x, "+2 std", linestyle=":", linewidth=1.0)
@@ -264,20 +264,20 @@ class MarketAnalyzerWindow:
                 linewidth=1.6,
                 color="blue",
             )
-            self._plot_series_column(
-                "zscore_rolling_504d",
-                x,
-                "Z-score 504d (thr 1.7)",
-                linewidth=1.4,
-                color="orange",
-            )
-            self._plot_series_column(
-                "zscore_rolling_756d",
-                x,
-                "Z-score 756d (thr 1.4)",
-                linewidth=1.4,
-                color="purple",
-            )
+            # self._plot_series_column(
+            #     "zscore_rolling_504d",
+            #     x,
+            #     "Z-score 504d (thr 1.7)",
+            #     linewidth=1.4,
+            #     color="orange",
+            # )
+            # self._plot_series_column(
+            #     "zscore_rolling_756d",
+            #     x,
+            #     "Z-score 756d (thr 1.4)",
+            #     linewidth=1.4,
+            #     color="purple",
+            # )
             self._plot_series_column(
                 "zscore_rolling_1260d",
                 x,
@@ -342,7 +342,7 @@ class MarketAnalyzerWindow:
 
         # médias móveis visuais
         daily["mm_252"] = daily["taxa_media"].rolling(252, min_periods=30).mean()
-        daily["mm_756"] = daily["taxa_media"].rolling(756, min_periods=60).mean()
+        daily["mm_1260"] = daily["taxa_media"].rolling(1260, min_periods=60).mean()
 
         daily["banda_1dp_sup"] = mean_value + std_value
         daily["banda_1dp_inf"] = mean_value - std_value

@@ -8,18 +8,19 @@ import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import pandas as pd
 from pandas.api.types import is_string_dtype
-from macro.macro_features import *
 from backtest.algorithms import *
 from backtest.algorithms_ml import *
+from data_updater.tesouro_updater import *
+from data_updater.update_config import *
 
 
-CSV_PATH = Path("data/ipca_principal.csv")
+CSV_PATH = Path("data/tesouro_ipca.csv")
 
 def main() -> int:
     try:
+        bootstrap_tesouro_updates()
         df = load_data(CSV_PATH)
         daily = build_daily_series(df)
-        daily = add_forward_returns(daily)
         app_registry = create_backtest_registry()
 
         app = MarketAnalyzerWindow(daily=daily, registry=app_registry)
@@ -30,42 +31,75 @@ def main() -> int:
     except Exception as exc:
         print(f"Erro ao executar analise: {exc}", file=sys.stderr)
         return 1
+    
+def bootstrap_tesouro_updates() -> None:
+    series_name = "tesouro_ipca"
+    raw_csv = "data/precotaxatesourodireto.csv"
+    tesouro_ipca_csv = "data/tesouro_ipca.csv"
+
+    print("=== Atualização Tesouro Direto ===")
+
+    if was_updated_today(series_name):
+        print("[SKIP] atualização do Tesouro já foi tentada hoje")
+
+        if not Path(tesouro_ipca_csv).exists():
+            rebuilt = rebuild_tesouro_ipca(raw_csv, tesouro_ipca_csv)
+            print(
+                f"[OK] tesouro_ipca.csv regenerado com {rebuilt['rows']} linhas "
+                f"({rebuilt['start_date']} -> {rebuilt['end_date']})"
+            )
+        else:
+            print("[SKIP] tesouro_ipca.csv já existe")
+        return
+
+    try:
+        result = update_tesouro_csv_if_needed(raw_csv)
+
+        if result["updated"]:
+            print(
+                f"[OK] bruto atualizado de {result.get('old_last_date')} "
+                f"para {result['last_date']}"
+            )
+        else:
+            print(
+                f"[SKIP] bruto já está no snapshot esperado "
+                f"(last={result['last_date']}, target={result['target_date']}, reason={result['reason']})"
+            )
+
+        if result["updated"] or (not Path(tesouro_ipca_csv).exists()):
+            rebuilt = rebuild_tesouro_ipca(raw_csv, tesouro_ipca_csv)
+            print(
+                f"[OK] tesouro_ipca.csv regenerado com {rebuilt['rows']} linhas "
+                f"({rebuilt['start_date']} -> {rebuilt['end_date']})"
+            )
+        else:
+            print("[SKIP] tesouro_ipca.csv já estava consistente com o bruto")
+
+    finally:
+        # marca que a tentativa foi feita hoje, mesmo se não houve update novo
+        mark_updated_today(series_name)
 
 
 def create_backtest_registry() -> BacktestRegistry:
     app_registry = BacktestRegistry()
 
     app_registry.register(
-        "Optimize Macro Regime Thresholds",
-        backtest_optimize_macro_regime_thresholds,
-    )
-    app_registry.register(
         "Optimize Entry Threshold Fine",
         backtest_optimize_entry_threshold_fine,
     )
-    app_registry.register("Macro Entry Impact", backtest_macro_entry_impact)
+    # app_registry.register("FX Trend Vol Regime", backtest_fx_trend_vol_regime)
+    # app_registry.register("FX Regime Event Sensitivity",backtest_fx_regime_event_sensitivity)
+    # app_registry.register("FX Forward Returns", backtest_fx_forward_returns)
+    # app_registry.register("Real Rate Trade by FX Regime",backtest_realrate_trade_by_fx_regime)
+    # app_registry.register("Real Rate Trade by FX Regime Detail", backtest_realrate_trade_fx_regime_detail)
+    # app_registry.register("Real Rate Signal Validity by FX Regime", backtest_realrate_signal_validity_by_fx_regime)
     app_registry.register(
-        "Macro Variable Event Sensitivity",
-        backtest_macro_variable_event_sensitivity,
+        "Real Rate Non-Optimal Entry Plan",
+        backtest_realrate_non_optimal_entry_plan,
     )
-    app_registry.register("FX Trend Vol Regime", backtest_fx_trend_vol_regime)
-    app_registry.register(
-        "FX Regime Event Sensitivity",
-        backtest_fx_regime_event_sensitivity,
-    )
-    app_registry.register("FX Forward Returns", backtest_fx_forward_returns)
-    app_registry.register(
-        "Real Rate Trade by FX Regime",
-        backtest_realrate_trade_by_fx_regime,
-    )
-    app_registry.register(
-        "Real Rate Trade by FX Regime Detail",
-        backtest_realrate_trade_fx_regime_detail,
-    )
-    app_registry.register(
-        "Real Rate Signal Validity by FX Regime",
-        backtest_realrate_signal_validity_by_fx_regime,
-    )
+    app_registry.register("IPCA+ State of Art",backtest_realrate_state_of_art)
+
+    #Algoritmos de ML, por enquanto pausados.
     #app_registry.register("Ridge Position Sizing Overlay",backtest_ridge_position_sizing_overlay)
     #app_registry.register("Supervised Dataset Preview", backtest_build_supervised_dataset_preview)
     # app_registry.register("Ridge Forward Return 120d", backtest_ridge_forward_return_120d)
@@ -133,25 +167,6 @@ def load_data(csv_path: Path) -> pd.DataFrame:
 
     df = df.sort_values(["Data Base", "Data Vencimento"]).reset_index(drop=True)
     return df
-
-def load_macro_regime_data() -> pd.DataFrame:
-    macro_df = build_daily_macro_frame()
-    macro_df = add_macro_features(macro_df)
-    macro_df = add_macro_regime_score(macro_df)
-
-    print("\n=== RESUMO MACRO ATUAL ===")
-    last = macro_df.dropna(subset=["macro_regime_score"]).iloc[-1]
-
-    print(f"Última data macro:      {last['data'].date()}")
-    print(f"IPCA 12m:               {last['ipca_12m']:.2f}%")
-    print(f"DBGG:                   {last['dbgg']:.2f}% PIB")
-    print(f"DBGG 12m diff:          {last['dbgg_12m_diff']:.2f} p.p.")
-    print(f"USD/BRL:                {last['usdbrl']:.4f}")
-    print(f"USD/BRL stress:         {last['usdbrl_stress']:.2%}")
-    print(f"Macro regime score:     {last['macro_regime_score']:.0f}")
-    print(f"Macro regime label:     {last['macro_regime_label']}")
-
-    return macro_df
 
 def estimate_bond_return(
     rate_change: float,
@@ -326,7 +341,7 @@ def build_daily_series(df: pd.DataFrame) -> pd.DataFrame:
 
     # Médias móveis
     daily["mm_252"] = daily["taxa_media"].rolling(252, min_periods=30).mean()
-    daily["mm_756"] = daily["taxa_media"].rolling(756, min_periods=60).mean()
+    daily["mm_1260"] = daily["taxa_media"].rolling(1260, min_periods=60).mean()
 
     # Bandas históricas fixas
     daily["banda_1dp_sup"] = mean_value + std_value
@@ -366,21 +381,6 @@ def classify_stretch(zscore: float) -> str:
     if abs_z < 3:
         return "extremo"
     return "raríssimo"
-
-def add_forward_returns(daily: pd.DataFrame) -> pd.DataFrame:
-    """
-    Calcula a variação futura da taxa.
-    Exemplo:
-    forward_30d = taxa daqui 30 dias - taxa de hoje
-
-    Se o valor for negativo, significa que a taxa caiu depois.
-    """
-    horizons = [30, 90, 180, 252]
-
-    for h in horizons:
-        daily[f"forward_{h}d"] = daily["taxa_media"].shift(-h) - daily["taxa_media"]
-
-    return daily
 
 def mark_threshold_cross_events(
     daily: pd.DataFrame,
@@ -610,8 +610,8 @@ def plot_series(daily: pd.DataFrame) -> None:
             )
             ax.plot(
                 daily["Data Base"],
-                daily["mm_756"],
-                label="Média móvel 756d",
+                daily["mm_1260"],
+                label="Média móvel 1260d",
                 linewidth=1.2,
             )
             ax.plot(
