@@ -122,15 +122,17 @@ class MarketAnalyzerWindow:
     def _build_ui(self) -> None:
         notebook = ttk.Notebook(self.root)
         notebook.pack(fill="both", expand=True, padx=10, pady=10)
+        self.notebook = notebook
 
         self.series_tab = ttk.Frame(notebook, padding=10)
         self.backtest_tab = ttk.Frame(notebook, padding=10)
 
-        notebook.add(self.series_tab, text="Series")
         notebook.add(self.backtest_tab, text="Backtests")
+        notebook.add(self.series_tab, text="Series")
 
-        self._build_series_tab(self.series_tab)
         self._build_backtest_tab(self.backtest_tab)
+        self._build_series_tab(self.series_tab)
+        self.notebook.select(self.backtest_tab)
 
     def _build_series_tab(self, parent: ttk.Frame) -> None:
         controls = ttk.Frame(parent)
@@ -243,14 +245,60 @@ class MarketAnalyzerWindow:
             self.series_ax.set_ylabel("Real Rate (%)")
             self.series_view_label.configure(text="View: Taxa")
         else:
-            self._plot_series_column("zscore", x, "Historical z-score", linewidth=1.2)
-            self._plot_series_column("zscore_rolling_252d", x, "Rolling z-score 252d", linewidth=1.2)
-            self.series_ax.axhline(0, linestyle="--", linewidth=1.0)
-            self.series_ax.axhline(1, linestyle=":", linewidth=1.0)
-            self.series_ax.axhline(2, linestyle=":", linewidth=1.0)
-            self.series_ax.axhline(-1, linestyle=":", linewidth=1.0)
-            self.series_ax.axhline(-2, linestyle=":", linewidth=1.0)
-            self.series_ax.set_title("IPCA+ Long - Z-score")
+            # série histórica global
+            self._plot_series_column(
+                "zscore",
+                x,
+                "Historical z-score",
+                linewidth=1.0,
+                linestyle="--",
+                alpha=0.6,
+                color="gray",
+            )
+
+            # rollings validados
+            self._plot_series_column(
+                "zscore_rolling_252d",
+                x,
+                "Z-score 252d (thr 1.7)",
+                linewidth=1.6,
+                color="blue",
+            )
+            self._plot_series_column(
+                "zscore_rolling_504d",
+                x,
+                "Z-score 504d (thr 1.7)",
+                linewidth=1.4,
+                color="orange",
+            )
+            self._plot_series_column(
+                "zscore_rolling_756d",
+                x,
+                "Z-score 756d (thr 1.4)",
+                linewidth=1.4,
+                color="purple",
+            )
+            self._plot_series_column(
+                "zscore_rolling_1260d",
+                x,
+                "Z-score 1260d (thr 1.2)",
+                linewidth=1.4,
+                color="green",
+            )
+
+            # linha zero
+            self.series_ax.axhline(0, linestyle="--", linewidth=1.0, color="black")
+
+            # thresholds ótimos por horizonte
+            self.series_ax.axhline(1.7, linestyle=":", linewidth=1.0, color="blue", alpha=0.8)
+            self.series_ax.axhline(1.7, linestyle=":", linewidth=1.0, color="orange", alpha=0.8)
+            self.series_ax.axhline(1.4, linestyle=":", linewidth=1.0, color="purple", alpha=0.8)
+            self.series_ax.axhline(1.2, linestyle=":", linewidth=1.0, color="green", alpha=0.8)
+
+            # saída do sistema principal
+            self.series_ax.axhline(-2.0, linestyle=":", linewidth=1.0, color="red", alpha=0.8)
+
+            self.series_ax.set_title("IPCA+ Long - Multi Rolling Z-score")
             self.series_ax.set_ylabel("Z-score")
             self.series_view_label.configure(text="View: Z-score")
 
@@ -292,6 +340,7 @@ class MarketAnalyzerWindow:
             percentis.append(sum(v <= value for v in history) / len(history))
         daily["percentil_historico"] = percentis
 
+        # médias móveis visuais
         daily["mm_252"] = daily["taxa_media"].rolling(252, min_periods=30).mean()
         daily["mm_756"] = daily["taxa_media"].rolling(756, min_periods=60).mean()
 
@@ -300,25 +349,29 @@ class MarketAnalyzerWindow:
         daily["banda_2dp_sup"] = mean_value + 2 * std_value
         daily["banda_2dp_inf"] = mean_value - 2 * std_value
 
-        rolling_window = min(252, len(daily))
-        min_periods = min(60, rolling_window)
+        def add_rolling_zscore(df: pd.DataFrame, window: int) -> None:
+            rolling_window = min(window, len(df))
+            min_periods = min(max(60, int(window * 0.25)), rolling_window)
 
-        daily["media_rolling_252d"] = daily["taxa_media"].rolling(
-            window=rolling_window,
-            min_periods=min_periods,
-        ).mean()
-        daily["desvio_rolling_252d"] = daily["taxa_media"].rolling(
-            window=rolling_window,
-            min_periods=min_periods,
-        ).std()
-        daily["zscore_rolling_252d"] = (
-            (daily["taxa_media"] - daily["media_rolling_252d"])
-            / daily["desvio_rolling_252d"]
-        )
+            mean_col = f"media_rolling_{window}d"
+            std_col = f"desvio_rolling_{window}d"
+            z_col = f"zscore_rolling_{window}d"
 
-        daily["media_rolling_252d"] = daily["media_rolling_252d"]
-        daily["desvio_rolling_252d"] = daily["desvio_rolling_252d"]
-        daily["zscore_rolling_252d"] = daily["zscore_rolling_252d"]
+            df[mean_col] = df["taxa_media"].rolling(
+                window=rolling_window,
+                min_periods=min_periods,
+            ).mean()
+
+            df[std_col] = df["taxa_media"].rolling(
+                window=rolling_window,
+                min_periods=min_periods,
+            ).std()
+
+            df[z_col] = (df["taxa_media"] - df[mean_col]) / df[std_col]
+
+        # janelas validadas
+        for window in [252, 504, 756, 1260]:
+            add_rolling_zscore(daily, window)
 
         return daily
 
