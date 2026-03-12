@@ -9,18 +9,8 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from pandas.api.types import is_string_dtype
 from macro.macro_features import *
-from backtest.algorithms import (
-    backtest_fx_forward_returns,
-    backtest_fx_regime_event_sensitivity,
-    backtest_fx_trend_vol_regime,
-    backtest_macro_entry_impact,
-    backtest_macro_variable_event_sensitivity,
-    backtest_optimize_entry_threshold_fine,
-    backtest_optimize_macro_regime_thresholds,
-    backtest_realrate_signal_validity_by_fx_regime,
-    backtest_realrate_trade_by_fx_regime,
-    backtest_realrate_trade_fx_regime_detail,
-)
+from backtest.algorithms import *
+from backtest.algorithms_ml import *
 
 
 CSV_PATH = Path("data/ipca_principal.csv")
@@ -76,6 +66,12 @@ def create_backtest_registry() -> BacktestRegistry:
         "Real Rate Signal Validity by FX Regime",
         backtest_realrate_signal_validity_by_fx_regime,
     )
+    #app_registry.register("Ridge Position Sizing Overlay",backtest_ridge_position_sizing_overlay)
+    #app_registry.register("Supervised Dataset Preview", backtest_build_supervised_dataset_preview)
+    # app_registry.register("Ridge Forward Return 120d", backtest_ridge_forward_return_120d)
+    # app_registry.register("Ridge Feature Importance", backtest_ridge_feature_importance)
+    # app_registry.register("Baseline vs Ridge Filter", backtest_compare_baseline_vs_ridge_filter)
+    # app_registry.register("Optimize Ridge Filter Threshold", backtest_optimize_ridge_filter_threshold)
     return app_registry
 
 def load_data(csv_path: Path) -> pd.DataFrame:

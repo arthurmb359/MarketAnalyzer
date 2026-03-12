@@ -96,7 +96,7 @@ class BacktestWindow:
 
 class MarketAnalyzerWindow:
     def __init__(self, daily: pd.DataFrame, registry: "BacktestRegistry") -> None:
-        self.daily = daily.copy()
+        self.daily_full = daily.copy()
         self.registry = registry
 
         self.root = tk.Tk()
@@ -104,8 +104,17 @@ class MarketAnalyzerWindow:
         self.root.geometry("1200x800")
         self.root.minsize(960, 600)
 
+        self.base_daily = (
+            self.daily_full[["Data Base", "taxa_media"]]
+            .dropna(subset=["Data Base", "taxa_media"])
+            .sort_values("Data Base")
+            .reset_index(drop=True)
+        )
+        self.daily = self._recalculate_series(self.base_daily)
+
         self.series_views = ["taxa", "zscore"]
         self.series_view_index = 0
+        self.series_end_date_var = tk.StringVar()
         self.selected_algorithm = tk.StringVar()
 
         self._build_ui()
@@ -141,6 +150,36 @@ class MarketAnalyzerWindow:
             controls,
             text="Use Left/Right to switch views and toolbar for zoom/pan.",
         ).pack(side="left")
+
+        date_controls = ttk.Frame(parent)
+        date_controls.pack(fill="x", pady=(0, 8))
+
+        ttk.Label(
+            date_controls,
+            text="End date (dd/mm/yyyy or yyyy-mm-dd):",
+        ).pack(side="left", padx=(0, 8))
+
+        self.series_end_date_entry = ttk.Entry(
+            date_controls,
+            textvariable=self.series_end_date_var,
+            width=20,
+        )
+        self.series_end_date_entry.pack(side="left", padx=(0, 8))
+
+        ttk.Button(
+            date_controls,
+            text="Apply",
+            command=self._apply_series_end_date,
+        ).pack(side="left", padx=(0, 4))
+
+        ttk.Button(
+            date_controls,
+            text="Reset",
+            command=self._reset_series_end_date,
+        ).pack(side="left")
+
+        self.series_status_label = ttk.Label(date_controls, text="Using full history.")
+        self.series_status_label.pack(side="left", padx=(12, 0))
 
         chart_frame = ttk.Frame(parent)
         chart_frame.pack(fill="both", expand=True)
@@ -229,6 +268,82 @@ class MarketAnalyzerWindow:
 
         self.series_figure.tight_layout()
         self.series_canvas.draw_idle()
+
+    def _recalculate_series(self, source: pd.DataFrame) -> pd.DataFrame:
+        daily = source.copy().sort_values("Data Base").reset_index(drop=True)
+
+        if daily.empty:
+            raise ValueError("No data available for selected end date.")
+
+        mean_value = daily["taxa_media"].mean()
+        std_value = daily["taxa_media"].std()
+
+        daily["media_historica"] = mean_value
+        daily["desvio_padrao"] = std_value
+
+        if pd.notna(std_value) and std_value != 0:
+            daily["zscore"] = (daily["taxa_media"] - mean_value) / std_value
+        else:
+            daily["zscore"] = pd.NA
+
+        percentis = []
+        values = daily["taxa_media"].tolist()
+        for i, value in enumerate(values):
+            history = values[: i + 1]
+            percentis.append(sum(v <= value for v in history) / len(history))
+        daily["percentil_historico"] = percentis
+
+        daily["mm_252"] = daily["taxa_media"].rolling(252, min_periods=30).mean()
+        daily["mm_756"] = daily["taxa_media"].rolling(756, min_periods=60).mean()
+
+        daily["banda_1dp_sup"] = mean_value + std_value
+        daily["banda_1dp_inf"] = mean_value - std_value
+        daily["banda_2dp_sup"] = mean_value + 2 * std_value
+        daily["banda_2dp_inf"] = mean_value - 2 * std_value
+
+        daily["media_rolling_5a"] = daily["taxa_media"].rolling(
+            window=1260,
+            min_periods=252,
+        ).mean()
+        daily["desvio_rolling_5a"] = daily["taxa_media"].rolling(
+            window=1260,
+            min_periods=252,
+        ).std()
+        daily["zscore_rolling_5a"] = (
+            (daily["taxa_media"] - daily["media_rolling_5a"])
+            / daily["desvio_rolling_5a"]
+        )
+
+        return daily
+
+    def _apply_series_end_date(self) -> None:
+        raw_date = self.series_end_date_var.get().strip()
+        if not raw_date:
+            self._reset_series_end_date()
+            return
+
+        end_date = pd.to_datetime(raw_date, dayfirst=True, errors="coerce")
+        if pd.isna(end_date):
+            self.series_status_label.configure(text="Invalid date.")
+            return
+
+        end_date = end_date.normalize()
+        filtered = self.base_daily[self.base_daily["Data Base"] <= end_date].copy()
+
+        if filtered.empty:
+            self.series_status_label.configure(text="No data on/before selected date.")
+            return
+
+        self.daily = self._recalculate_series(filtered)
+        applied = self.daily["Data Base"].iloc[-1].strftime("%d/%m/%Y")
+        self.series_status_label.configure(text=f"Using history up to {applied}.")
+        self._draw_series()
+
+    def _reset_series_end_date(self) -> None:
+        self.series_end_date_var.set("")
+        self.daily = self._recalculate_series(self.base_daily)
+        self.series_status_label.configure(text="Using full history.")
+        self._draw_series()
 
     def _next_series_view(self) -> None:
         self.series_view_index = (self.series_view_index + 1) % len(self.series_views)
