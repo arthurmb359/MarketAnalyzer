@@ -5,7 +5,7 @@ import json
 from datetime import datetime
 
 
-CONFIG_PATH = Path("data_update/update_config.json")
+CONFIG_PATH = Path("data_updater/update_config.json")
 
 
 def _today_str() -> str:
