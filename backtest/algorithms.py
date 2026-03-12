@@ -389,7 +389,7 @@ def _run_real_rate_scaled_once(
     df = _build_research_frame(duration_minima=duration_minima)
     df = df.sort_values("data").reset_index(drop=True)
 
-    zscore_col = "zscore_rolling_5a"
+    zscore_col = "zscore_rolling_252d"
 
     if tiers is None:
         tiers = [
@@ -560,7 +560,7 @@ def backtest_optimize_entry_threshold_fine() -> str:
         + ", ".join(f"{z:.2f}" for z in z_values)
     )
     lines.append(f"duration_minima fixa: {duration_minima}")
-    lines.append(f"saída fixa: zscore_rolling_5a <= {exit_threshold}")
+    lines.append(f"saída fixa: zscore_rolling_252d <= {exit_threshold}")
     lines.append("critério principal: ganho absoluto total")
     lines.append("")
 
@@ -1511,7 +1511,7 @@ def backtest_realrate_signal_validity_by_fx_regime(
     df["data"] = pd.to_datetime(df["data"], errors="coerce")
 
     # 2) colunas reais do repo
-    z_col = "zscore_rolling_5a"
+    z_col = "zscore_rolling_252d"
     rr_col = "taxa_media"
 
     df = (

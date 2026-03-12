@@ -111,19 +111,24 @@ def load_ipca_long_series(
             "rolling_window ficou 0; verifique se a série diária foi carregada corretamente."
         )
 
-    daily["media_rolling_5a"] = daily["taxa_media"].rolling(
+    daily["media_rolling_252d"] = daily["taxa_media"].rolling(
         window=rolling_window,
         min_periods=min_periods,
     ).mean()
 
-    daily["desvio_rolling_5a"] = daily["taxa_media"].rolling(
+    daily["desvio_rolling_252d"] = daily["taxa_media"].rolling(
         window=rolling_window,
         min_periods=min_periods,
     ).std()
 
-    daily["zscore_rolling_5a"] = (
-        (daily["taxa_media"] - daily["media_rolling_5a"]) /
-        daily["desvio_rolling_5a"]
+    daily["zscore_rolling_252d"] = (
+        (daily["taxa_media"] - daily["media_rolling_252d"]) /
+        daily["desvio_rolling_252d"]
     )
+
+    # Compatibilidade temporária com nomes antigos.
+    daily["media_rolling_5a"] = daily["media_rolling_252d"]
+    daily["desvio_rolling_5a"] = daily["desvio_rolling_252d"]
+    daily["zscore_rolling_5a"] = daily["zscore_rolling_252d"]
 
     return daily

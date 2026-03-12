@@ -233,7 +233,7 @@ class MarketAnalyzerWindow:
         if view == "taxa":
             self._plot_series_column("taxa_media", x, "Daily average rate", linewidth=1.5)
             self._plot_series_column("media_historica", x, "Historical mean", linestyle="--", linewidth=1.2)
-            self._plot_series_column("media_rolling_5a", x, "Rolling mean 5y", linewidth=1.2)
+            self._plot_series_column("media_rolling_252d", x, "Rolling mean 252d", linewidth=1.2)
             self._plot_series_column("mm_252", x, "Moving avg 252d", linewidth=1.0)
             self._plot_series_column("mm_756", x, "Moving avg 756d", linewidth=1.0)
             self._plot_series_column("banda_1dp_sup", x, "+1 std", linestyle=":", linewidth=1.0)
@@ -245,7 +245,7 @@ class MarketAnalyzerWindow:
             self.series_view_label.configure(text="View: Taxa")
         else:
             self._plot_series_column("zscore", x, "Historical z-score", linewidth=1.2)
-            self._plot_series_column("zscore_rolling_5a", x, "Rolling z-score 5y", linewidth=1.2)
+            self._plot_series_column("zscore_rolling_252d", x, "Rolling z-score 252d", linewidth=1.2)
             self.series_ax.axhline(0, linestyle="--", linewidth=1.0)
             self.series_ax.axhline(1, linestyle=":", linewidth=1.0)
             self.series_ax.axhline(2, linestyle=":", linewidth=1.0)
@@ -301,18 +301,25 @@ class MarketAnalyzerWindow:
         daily["banda_2dp_sup"] = mean_value + 2 * std_value
         daily["banda_2dp_inf"] = mean_value - 2 * std_value
 
-        daily["media_rolling_5a"] = daily["taxa_media"].rolling(
-            window=1260,
-            min_periods=252,
+        rolling_window = min(252, len(daily))
+        min_periods = min(60, rolling_window)
+
+        daily["media_rolling_252d"] = daily["taxa_media"].rolling(
+            window=rolling_window,
+            min_periods=min_periods,
         ).mean()
-        daily["desvio_rolling_5a"] = daily["taxa_media"].rolling(
-            window=1260,
-            min_periods=252,
+        daily["desvio_rolling_252d"] = daily["taxa_media"].rolling(
+            window=rolling_window,
+            min_periods=min_periods,
         ).std()
-        daily["zscore_rolling_5a"] = (
-            (daily["taxa_media"] - daily["media_rolling_5a"])
-            / daily["desvio_rolling_5a"]
+        daily["zscore_rolling_252d"] = (
+            (daily["taxa_media"] - daily["media_rolling_252d"])
+            / daily["desvio_rolling_252d"]
         )
+
+        daily["media_rolling_5a"] = daily["media_rolling_252d"]
+        daily["desvio_rolling_5a"] = daily["desvio_rolling_252d"]
+        daily["zscore_rolling_5a"] = daily["zscore_rolling_252d"]
 
         return daily
 

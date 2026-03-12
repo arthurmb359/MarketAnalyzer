@@ -289,7 +289,7 @@ def analyze_expected_bond_returns_generic(
 def build_daily_series(df: pd.DataFrame) -> pd.DataFrame:
     """
     Cria série diária usando o título com maior vencimento do dia.
-    Também calcula estatísticas históricas e rolling z-score de 5 anos.
+    Também calcula estatísticas históricas e rolling z-score de 252 dias.
     """
 
     df_sorted = df.sort_values(["Data Base", "Data Vencimento"])
@@ -334,23 +334,29 @@ def build_daily_series(df: pd.DataFrame) -> pd.DataFrame:
     daily["banda_2dp_sup"] = mean_value + 2 * std_value
     daily["banda_2dp_inf"] = mean_value - 2 * std_value
 
-    # Rolling z-score de 5 anos
-    rolling_window = 1260
+    # Rolling z-score de 252 dias, alinhado ao backtest
+    rolling_window = min(252, len(daily))
+    min_periods = min(60, rolling_window)
 
-    daily["media_rolling_5a"] = daily["taxa_media"].rolling(
+    daily["media_rolling_252d"] = daily["taxa_media"].rolling(
         window=rolling_window,
-        min_periods=252
+        min_periods=min_periods
     ).mean()
 
-    daily["desvio_rolling_5a"] = daily["taxa_media"].rolling(
+    daily["desvio_rolling_252d"] = daily["taxa_media"].rolling(
         window=rolling_window,
-        min_periods=252
+        min_periods=min_periods
     ).std()
 
-    daily["zscore_rolling_5a"] = (
-        (daily["taxa_media"] - daily["media_rolling_5a"]) /
-        daily["desvio_rolling_5a"]
+    daily["zscore_rolling_252d"] = (
+        (daily["taxa_media"] - daily["media_rolling_252d"]) /
+        daily["desvio_rolling_252d"]
     )
+
+    # Compatibilidade temporária com nomes antigos
+    daily["media_rolling_5a"] = daily["media_rolling_252d"]
+    daily["desvio_rolling_5a"] = daily["desvio_rolling_252d"]
+    daily["zscore_rolling_5a"] = daily["zscore_rolling_252d"]
 
     return daily
 
@@ -519,7 +525,7 @@ def run_event_studies_rolling(daily: pd.DataFrame) -> None:
     thresholds = [0.5, 1.0, 1.5, 2.0]
 
     print("\n" + "=" * 60)
-    print("ESTUDO DE REVERSÃO APÓS ESTICAMENTO - ROLLING Z-SCORE 5A")
+    print("ESTUDO DE REVERSÃO APÓS ESTICAMENTO - ROLLING Z-SCORE 252D")
     print("=" * 60)
     print(
         "Interpretação:\n"
@@ -530,7 +536,7 @@ def run_event_studies_rolling(daily: pd.DataFrame) -> None:
     for threshold in thresholds:
         analyze_threshold_generic(
             daily=daily,
-            signal_col="zscore_rolling_5a",
+            signal_col="zscore_rolling_252d",
             threshold=threshold,
         )
 
@@ -541,7 +547,7 @@ def print_summary(daily: pd.DataFrame) -> None:
     mean_value = last["media_historica"]
     std_value = last["desvio_padrao"]
     zscore = last["zscore"]
-    rolling_z = last["zscore_rolling_5a"]
+    rolling_z = last["zscore_rolling_252d"]
     percentil = last["percentil_historico"] * 100
     stretch = classify_stretch(zscore)
 
@@ -551,7 +557,7 @@ def print_summary(daily: pd.DataFrame) -> None:
     print(f"Média histórica:       {mean_value:.2f}%")
     print(f"Desvio padrão:         {std_value:.2f}")
     print(f"Z-score histórico:     {zscore:.2f}")
-    print(f"Z-score rolling 5a:    {rolling_z:.2f}")
+    print(f"Z-score rolling 252d:  {rolling_z:.2f}")
     print(f"Percentil histórico:   {percentil:.2f}%")
     print(f"Classificação:         {stretch}")
 
@@ -559,7 +565,7 @@ def print_summary(daily: pd.DataFrame) -> None:
         if rolling_z > 1.5:
             print("\nLeitura rolling: taxa bem acima do regime recente.")
         elif rolling_z > 1.0:
-            print("\nLeitura rolling: taxa esticada em relação aos últimos 5 anos.")
+            print("\nLeitura rolling: taxa esticada em relação aos últimos 252 dias úteis.")
         elif rolling_z > 0.5:
             print("\nLeitura rolling: taxa levemente acima do regime recente.")
         else:
@@ -597,14 +603,14 @@ def plot_series(daily: pd.DataFrame) -> None:
             )
             ax.plot(
                 daily["Data Base"],
-                daily["media_rolling_5a"],
-                label="Média rolling 5 anos",
+                daily["media_rolling_252d"],
+                label="Média rolling 252d",
                 linewidth=1.2,
             )
             ax.plot(
                 daily["Data Base"],
                 daily["mm_252"],
-                label="Média móvel 252d",
+                label="Média móvel rolling 252d",
                 linewidth=1.2,
             )
             ax.plot(
@@ -655,8 +661,8 @@ def plot_series(daily: pd.DataFrame) -> None:
             )
             ax.plot(
                 daily["Data Base"],
-                daily["zscore_rolling_5a"],
-                label="Z-score rolling 5 anos",
+                daily["zscore_rolling_252d"],
+                label="Z-score rolling 252d",
                 linewidth=1.2,
             )
             ax.axhline(0, linestyle="--", linewidth=1.0)
@@ -665,7 +671,7 @@ def plot_series(daily: pd.DataFrame) -> None:
             ax.axhline(-1, linestyle=":", linewidth=1.0)
             ax.axhline(-2, linestyle=":", linewidth=1.0)
 
-            ax.set_title("IPCA+ Longo - Z-score Histórico vs Rolling 5 Anos")
+            ax.set_title("IPCA+ Longo - Z-score Histórico vs Rolling 252d")
             ax.set_xlabel("Data")
             ax.set_ylabel("Z-score")
 

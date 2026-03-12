@@ -112,7 +112,7 @@ def _build_supervised_realrate_dataset(
 
     _ensure_columns(
         base,
-        ["data", "taxa_media", "zscore_rolling_5a"],
+        ["data", "taxa_media", "zscore_rolling_252d"],
         ctx="_build_research_frame",
     )
     _ensure_columns(
@@ -133,7 +133,7 @@ def _build_supervised_realrate_dataset(
     )
 
     # Aliases centrais
-    df["z"] = df["zscore_rolling_5a"]
+    df["z"] = df["zscore_rolling_252d"]
     df["rate"] = df["taxa_media"]
 
     # Lags / deltas do z-score
@@ -286,7 +286,7 @@ def run_ridge_walk_forward_120d(
             [
                 "data",
                 "taxa_media",
-                "zscore_rolling_5a",
+                "zscore_rolling_252d",
                 "fx_macro_regime",
             ]
         ].copy()
@@ -332,7 +332,7 @@ def backtest_ridge_forward_return_120d() -> str:
     for _, row in preview.iterrows():
         lines.append(
             f"{row['data'].strftime('%d/%m/%Y')} | "
-            f"z={row['zscore_rolling_5a']:.2f} | "
+            f"z={row['zscore_rolling_252d']:.2f} | "
             f"FX={row['fx_macro_regime']} | "
             f"y_true={row['y_true']:+.3f} | "
             f"y_pred={row['y_pred']:+.3f}"
@@ -359,7 +359,7 @@ def _mark_threshold_cross_events(
 def _run_event_trade_engine(
     df: pd.DataFrame,
     event_flag_col: str,
-    z_col: str = "zscore_rolling_5a",
+    z_col: str = "zscore_rolling_252d",
     rate_col: str = "taxa_media",
     exit_threshold: float = DEFAULT_Z_EXIT,
     duration_minima: int = DEFAULT_DURATION_MINIMA,
@@ -547,7 +547,7 @@ def _simple_rate_trade_score(
 def _run_entry_flag_trade_engine(
     df: pd.DataFrame,
     entry_flag_col: str,
-    z_col: str = "zscore_rolling_5a",
+    z_col: str = "zscore_rolling_252d",
     rate_col: str = "taxa_media",
     exit_threshold: float = DEFAULT_Z_EXIT,
     duration_minima: int = DEFAULT_DURATION_MINIMA,
@@ -685,7 +685,7 @@ def backtest_compare_baseline_vs_ridge_filter(
 
     _ensure_columns(
         df,
-        ["data", "zscore_rolling_5a", "taxa_media", "y_pred"],
+        ["data", "zscore_rolling_252d", "taxa_media", "y_pred"],
         ctx="backtest_compare_baseline_vs_ridge_filter",
     )
 
@@ -705,7 +705,7 @@ def backtest_compare_baseline_vs_ridge_filter(
     # =========================================================
     oos_df = _mark_threshold_cross_events(
         oos_df,
-        signal_col="zscore_rolling_5a",
+        signal_col="zscore_rolling_252d",
         threshold=z_threshold,
         event_col="z_event",
     )
@@ -719,7 +719,7 @@ def backtest_compare_baseline_vs_ridge_filter(
     baseline_trades, baseline_stats = _run_event_trade_engine(
         df=oos_df,
         event_flag_col="baseline_event",
-        z_col="zscore_rolling_5a",
+        z_col="zscore_rolling_252d",
         rate_col="taxa_media",
         exit_threshold=z_exit_threshold,
         duration_minima=duration_minima,
@@ -728,7 +728,7 @@ def backtest_compare_baseline_vs_ridge_filter(
     ml_trades, ml_stats = _run_event_trade_engine(
         df=oos_df,
         event_flag_col="ml_event",
-        z_col="zscore_rolling_5a",
+        z_col="zscore_rolling_252d",
         rate_col="taxa_media",
         exit_threshold=z_exit_threshold,
         duration_minima=duration_minima,
@@ -808,7 +808,7 @@ def backtest_build_supervised_dataset_preview() -> str:
     lines.append("")
     lines.append("Últimas 10 linhas válidas:")
 
-    preview_cols = ["data", "zscore_rolling_5a", "taxa_media", "fx_macro_regime", "target_return_120d"] + feature_cols[:8]
+    preview_cols = ["data", "zscore_rolling_252d", "taxa_media", "fx_macro_regime", "target_return_120d"] + feature_cols[:8]
     preview_cols = [c for c in preview_cols if c in df.columns]
 
     preview = df.dropna(subset=["target_return_120d"]).tail(10)[preview_cols]
@@ -849,7 +849,7 @@ def backtest_optimize_ridge_filter_threshold(
 
     _ensure_columns(
         df,
-        ["data", "zscore_rolling_5a", "taxa_media", "y_pred"],
+        ["data", "zscore_rolling_252d", "taxa_media", "y_pred"],
         ctx="backtest_optimize_ridge_filter_threshold",
     )
 
@@ -863,7 +863,7 @@ def backtest_optimize_ridge_filter_threshold(
     # Eventos por primeiro cruzamento
     oos_df = _mark_threshold_cross_events(
         oos_df,
-        signal_col="zscore_rolling_5a",
+        signal_col="zscore_rolling_252d",
         threshold=z_threshold,
         event_col="z_event",
     )
@@ -874,7 +874,7 @@ def backtest_optimize_ridge_filter_threshold(
     baseline_trades, baseline_stats = _run_event_trade_engine(
         df=oos_df,
         event_flag_col="baseline_event",
-        z_col="zscore_rolling_5a",
+        z_col="zscore_rolling_252d",
         rate_col="taxa_media",
         exit_threshold=z_exit_threshold,
         duration_minima=duration_minima,
@@ -889,7 +889,7 @@ def backtest_optimize_ridge_filter_threshold(
         ml_trades, ml_stats = _run_event_trade_engine(
             df=work,
             event_flag_col="ml_event",
-            z_col="zscore_rolling_5a",
+            z_col="zscore_rolling_252d",
             rate_col="taxa_media",
             exit_threshold=z_exit_threshold,
             duration_minima=duration_minima,
@@ -1028,7 +1028,7 @@ def _ridge_position_multiplier(y_pred: float) -> float:
 def _run_ridge_sizing_trade_engine(
     df: pd.DataFrame,
     event_flag_col: str,
-    z_col: str = "zscore_rolling_5a",
+    z_col: str = "zscore_rolling_252d",
     rate_col: str = "taxa_media",
     pred_col: str = "y_pred",
     exit_threshold: float = DEFAULT_Z_EXIT,
@@ -1143,7 +1143,7 @@ def backtest_ridge_position_sizing_overlay() -> str:
 
     _ensure_columns(
         df,
-        ["data", "zscore_rolling_5a", "taxa_media", "y_pred"],
+        ["data", "zscore_rolling_252d", "taxa_media", "y_pred"],
         ctx="backtest_ridge_position_sizing_overlay",
     )
 
@@ -1153,7 +1153,7 @@ def backtest_ridge_position_sizing_overlay() -> str:
 
     df = _mark_threshold_cross_events(
         df,
-        signal_col="zscore_rolling_5a",
+        signal_col="zscore_rolling_252d",
         threshold=DEFAULT_Z_ENTRY,
         event_col="z_event",
     )
@@ -1163,7 +1163,7 @@ def backtest_ridge_position_sizing_overlay() -> str:
     baseline_trades, baseline_stats = _run_event_trade_engine(
         df=df,
         event_flag_col="baseline_event",
-        z_col="zscore_rolling_5a",
+        z_col="zscore_rolling_252d",
         rate_col="taxa_media",
         exit_threshold=DEFAULT_Z_EXIT,
         duration_minima=DEFAULT_DURATION_MINIMA,
@@ -1172,7 +1172,7 @@ def backtest_ridge_position_sizing_overlay() -> str:
     ridge_trades, ridge_stats = _run_ridge_sizing_trade_engine(
         df=df,
         event_flag_col="z_event",
-        z_col="zscore_rolling_5a",
+        z_col="zscore_rolling_252d",
         rate_col="taxa_media",
         pred_col="y_pred",
         exit_threshold=DEFAULT_Z_EXIT,
