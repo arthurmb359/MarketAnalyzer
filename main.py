@@ -353,11 +353,6 @@ def build_daily_series(df: pd.DataFrame) -> pd.DataFrame:
         daily["desvio_rolling_252d"]
     )
 
-    # Compatibilidade temporária com nomes antigos
-    daily["media_rolling_5a"] = daily["media_rolling_252d"]
-    daily["desvio_rolling_5a"] = daily["desvio_rolling_252d"]
-    daily["zscore_rolling_5a"] = daily["zscore_rolling_252d"]
-
     return daily
 
 

@@ -234,7 +234,6 @@ class MarketAnalyzerWindow:
             self._plot_series_column("taxa_media", x, "Daily average rate", linewidth=1.5)
             self._plot_series_column("media_historica", x, "Historical mean", linestyle="--", linewidth=1.2)
             self._plot_series_column("media_rolling_252d", x, "Rolling mean 252d", linewidth=1.2)
-            self._plot_series_column("mm_252", x, "Moving avg 252d", linewidth=1.0)
             self._plot_series_column("mm_756", x, "Moving avg 756d", linewidth=1.0)
             self._plot_series_column("banda_1dp_sup", x, "+1 std", linestyle=":", linewidth=1.0)
             self._plot_series_column("banda_1dp_inf", x, "-1 std", linestyle=":", linewidth=1.0)
@@ -317,9 +316,9 @@ class MarketAnalyzerWindow:
             / daily["desvio_rolling_252d"]
         )
 
-        daily["media_rolling_5a"] = daily["media_rolling_252d"]
-        daily["desvio_rolling_5a"] = daily["desvio_rolling_252d"]
-        daily["zscore_rolling_5a"] = daily["zscore_rolling_252d"]
+        daily["media_rolling_252d"] = daily["media_rolling_252d"]
+        daily["desvio_rolling_252d"] = daily["desvio_rolling_252d"]
+        daily["zscore_rolling_252d"] = daily["zscore_rolling_252d"]
 
         return daily
 
