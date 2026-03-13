@@ -5,13 +5,14 @@ from tkinter import ttk
 from tkinter.scrolledtext import ScrolledText
 from typing import TYPE_CHECKING
 
-import pandas as pd
 import matplotlib.dates as mdates
+import pandas as pd
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 from matplotlib.figure import Figure
 
 if TYPE_CHECKING:
-    from backtest.registry import BacktestRegistry
+    from app.registry import BacktestRegistry
+
 
 class BacktestWindow:
     def __init__(self, registry: "BacktestRegistry") -> None:
@@ -245,7 +246,6 @@ class MarketAnalyzerWindow:
             self.series_ax.set_ylabel("Real Rate (%)")
             self.series_view_label.configure(text="View: Taxa")
         else:
-            # série histórica global
             self._plot_series_column(
                 "zscore",
                 x,
@@ -255,8 +255,6 @@ class MarketAnalyzerWindow:
                 alpha=0.6,
                 color="gray",
             )
-
-            # rollings validados
             self._plot_series_column(
                 "zscore_rolling_252d",
                 x,
@@ -264,20 +262,6 @@ class MarketAnalyzerWindow:
                 linewidth=1.6,
                 color="blue",
             )
-            # self._plot_series_column(
-            #     "zscore_rolling_504d",
-            #     x,
-            #     "Z-score 504d (thr 1.7)",
-            #     linewidth=1.4,
-            #     color="orange",
-            # )
-            # self._plot_series_column(
-            #     "zscore_rolling_756d",
-            #     x,
-            #     "Z-score 756d (thr 1.4)",
-            #     linewidth=1.4,
-            #     color="purple",
-            # )
             self._plot_series_column(
                 "zscore_rolling_1260d",
                 x,
@@ -286,16 +270,11 @@ class MarketAnalyzerWindow:
                 color="green",
             )
 
-            # linha zero
             self.series_ax.axhline(0, linestyle="--", linewidth=1.0, color="black")
-
-            # thresholds ótimos por horizonte
             self.series_ax.axhline(1.7, linestyle=":", linewidth=1.0, color="blue", alpha=0.8)
             self.series_ax.axhline(1.7, linestyle=":", linewidth=1.0, color="orange", alpha=0.8)
             self.series_ax.axhline(1.4, linestyle=":", linewidth=1.0, color="purple", alpha=0.8)
             self.series_ax.axhline(1.2, linestyle=":", linewidth=1.0, color="green", alpha=0.8)
-
-            # saída do sistema principal
             self.series_ax.axhline(-2.0, linestyle=":", linewidth=1.0, color="red", alpha=0.8)
 
             self.series_ax.set_title("IPCA+ Long - Multi Rolling Z-score")
@@ -340,7 +319,6 @@ class MarketAnalyzerWindow:
             percentis.append(sum(v <= value for v in history) / len(history))
         daily["percentil_historico"] = percentis
 
-        # médias móveis visuais
         daily["mm_252"] = daily["taxa_media"].rolling(252, min_periods=30).mean()
         daily["mm_1260"] = daily["taxa_media"].rolling(1260, min_periods=60).mean()
 
@@ -369,7 +347,6 @@ class MarketAnalyzerWindow:
 
             df[z_col] = (df["taxa_media"] - df[mean_col]) / df[std_col]
 
-        # janelas validadas
         for window in [252, 504, 756, 1260]:
             add_rolling_zscore(daily, window)
 
@@ -489,3 +466,6 @@ class MarketAnalyzerWindow:
 
     def run(self) -> None:
         self.root.mainloop()
+
+
+__all__ = ["BacktestWindow", "MarketAnalyzerWindow"]

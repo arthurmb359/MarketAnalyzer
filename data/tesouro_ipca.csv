@@ -1,4 +1,4 @@
-﻿Tipo Titulo,Data Vencimento,Data Base,Taxa Compra Manha,Taxa Venda Manha,PU Compra Manha,PU Venda Manha,PU Base Manha,Prazo_anos
+Tipo Titulo,Data Vencimento,Data Base,Taxa Compra Manha,Taxa Venda Manha,PU Compra Manha,PU Venda Manha,PU Base Manha,Prazo_anos
 Tesouro IPCA+,2015-05-15,2005-07-18,"8,74","8,80","675,19","671,56","671,25",9.82340862422998
 Tesouro IPCA+,2024-08-15,2005-07-18,"8,81","8,89","308,19","303,91","303,77",19.077344284736483
 Tesouro IPCA+,2015-05-15,2005-07-19,"8,74","8,80","675,51","671,87","671,56",9.820670773442847
