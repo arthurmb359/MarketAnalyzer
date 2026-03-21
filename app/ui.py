@@ -237,7 +237,7 @@ class MarketAnalyzerWindow:
             self._plot_series_column("taxa_media", x, "Daily average rate", linewidth=1.5)
             self._plot_series_column("media_historica", x, "Historical mean", linestyle="--", linewidth=1.2)
             self._plot_series_column("media_rolling_252d", x, "Rolling mean 252d", linewidth=1.2)
-            self._plot_series_column("mm_1260", x, "Moving avg 1260d", linewidth=1.0)
+            self._plot_series_column("mm_1242", x, "Moving avg 1242d", linewidth=1.0)
             self._plot_series_column("banda_1dp_sup", x, "+1 std", linestyle=":", linewidth=1.0)
             self._plot_series_column("banda_1dp_inf", x, "-1 std", linestyle=":", linewidth=1.0)
             self._plot_series_column("banda_2dp_sup", x, "+2 std", linestyle=":", linewidth=1.0)
@@ -258,23 +258,34 @@ class MarketAnalyzerWindow:
             self._plot_series_column(
                 "zscore_rolling_252d",
                 x,
-                "Z-score 252d (thr 1.7)",
+                "Z-score 252d",
                 linewidth=1.6,
                 color="blue",
             )
             self._plot_series_column(
-                "zscore_rolling_1260d",
+                "zscore_rolling_522d",
                 x,
-                "Z-score 1260d (thr 1.2)",
+                "Z-score 522d",
+                linewidth=1.4,
+                color="orange",
+            )
+            self._plot_series_column(
+                "zscore_rolling_882d",
+                x,
+                "Z-score 882d",
+                linewidth=1.4,
+                color="purple",
+            )
+            self._plot_series_column(
+                "zscore_rolling_1242d",
+                x,
+                "Z-score 1242d",
                 linewidth=1.4,
                 color="green",
             )
 
             self.series_ax.axhline(0, linestyle="--", linewidth=1.0, color="black")
-            self.series_ax.axhline(1.7, linestyle=":", linewidth=1.0, color="blue", alpha=0.8)
-            self.series_ax.axhline(1.7, linestyle=":", linewidth=1.0, color="orange", alpha=0.8)
-            self.series_ax.axhline(1.4, linestyle=":", linewidth=1.0, color="purple", alpha=0.8)
-            self.series_ax.axhline(1.2, linestyle=":", linewidth=1.0, color="green", alpha=0.8)
+            self.series_ax.axhline(2.0, linestyle=":", linewidth=1.0, color="blue", alpha=0.8)
             self.series_ax.axhline(-2.0, linestyle=":", linewidth=1.0, color="red", alpha=0.8)
 
             self.series_ax.set_title("IPCA+ Long - Multi Rolling Z-score")
@@ -320,7 +331,7 @@ class MarketAnalyzerWindow:
         daily["percentil_historico"] = percentis
 
         daily["mm_252"] = daily["taxa_media"].rolling(252, min_periods=30).mean()
-        daily["mm_1260"] = daily["taxa_media"].rolling(1260, min_periods=60).mean()
+        daily["mm_1242"] = daily["taxa_media"].rolling(1242, min_periods=60).mean()
 
         daily["banda_1dp_sup"] = mean_value + std_value
         daily["banda_1dp_inf"] = mean_value - std_value
@@ -347,7 +358,7 @@ class MarketAnalyzerWindow:
 
             df[z_col] = (df["taxa_media"] - df[mean_col]) / df[std_col]
 
-        for window in [252, 504, 756, 1260]:
+        for window in [252, 522, 882, 1242]:
             add_rolling_zscore(daily, window)
 
         return daily

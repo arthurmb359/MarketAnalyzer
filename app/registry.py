@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Callable
 
 from markets.tesouro_ipca.backtests import (
-    backtest_optimize_entry_threshold_fine,
+    backtest_optimize_zscore_grid,
     backtest_realrate_state_of_art,
 )
 from markets.tesouro_ipca.signals import backtest_ipca_entry_signal
@@ -36,20 +36,20 @@ def create_backtest_registry() -> BacktestRegistry:
 
     registry.register("IPCA+ Entry Signal", backtest_ipca_entry_signal)
     registry.register(
-        "Optimize Entry Threshold Fine",
-        backtest_optimize_entry_threshold_fine,
+        "Optimize Zscore Grid (Multiple Z-Rolling, Entries and Exits from 252d to 1242d )",
+        backtest_optimize_zscore_grid,
     )
     registry.register("IPCA+ State of Art", backtest_realrate_state_of_art)
-    registry.register("FX Regime Event Sensitivity", backtest_fx_regime_event_sensitivity)
-    registry.register("Real Rate Trade by FX Regime", backtest_realrate_trade_by_fx_regime)
-    registry.register(
-        "Real Rate Trade FX Regime Detail",
-        backtest_realrate_trade_fx_regime_detail,
-    )
-    registry.register(
-        "Real Rate Signal Validity by FX Regime",
-        backtest_realrate_signal_validity_by_fx_regime,
-    )
+    # registry.register("FX Regime Event Sensitivity", backtest_fx_regime_event_sensitivity)
+    # registry.register("Real Rate Trade by FX Regime", backtest_realrate_trade_by_fx_regime)
+    # registry.register(
+    #     "Real Rate Trade FX Regime Detail",
+    #     backtest_realrate_trade_fx_regime_detail,
+    # )
+    # registry.register(
+    #     "Real Rate Signal Validity by FX Regime",
+    #     backtest_realrate_signal_validity_by_fx_regime,
+    # )
 
     return registry
 

@@ -8,16 +8,42 @@ from core.reporting import render_lines, render_result, result as build_result, 
 from markets.tesouro_ipca.loader import load_ipca_long_research_frame
 
 
-def backtest_optimize_entry_threshold_fine() -> str:
-    z_values = [
-        1.50, 1.60, 1.70, 1.80, 1.90, 2.00, 2.10, 2.20, 2.30, 2.40,
-        2.50, 2.60, 2.70, 2.80, 2.90, 3.00, 3.10, 3.20, 3.30, 3.40,
-        3.50,
-    ]
+def _float_range(start: float, stop: float, step: float) -> list[float]:
+    values: list[float] = []
+    current = start
+
+    while current <= (stop + 1e-9):
+        values.append(round(current, 10))
+        current += step
+
+    return values
+
+
+def _int_range(start: int, stop: int, step: int) -> list[int]:
+    return list(range(start, stop + 1, step))
+
+
+def _approx_duration_from_prazo(prazo_anos: float) -> float:
+    if pd.isna(prazo_anos):
+        return 0.0
+    return max(0.0, float(prazo_anos))
+
+
+def _mark_to_market_return_pct(
+    entry_rate_pct: float,
+    exit_rate_pct: float,
+    duration: float,
+) -> float:
+    delta_rate_pp = exit_rate_pct - entry_rate_pct
+    return -duration * delta_rate_pp
+
+
+def backtest_optimize_zscore_grid() -> str:
+    entry_thresholds = _float_range(1.0, 3.0, 0.2)
+    rolling_windows = _int_range(252, 1242, 90)
+    exit_thresholds = [-value for value in _float_range(1.0, 2.0, 0.2)]
     duration_minima = 15
-    exit_threshold = -2.0
     base_notional = 100.0
-    entry_threshold_1260_overlay = 1.2
 
     df = load_ipca_long_research_frame(duration_minima=0.0).copy()
     df = (
@@ -25,255 +51,239 @@ def backtest_optimize_entry_threshold_fine() -> str:
         .sort_values("data")
         .reset_index(drop=True)
     )
-
-    df["z_252"] = rolling_zscore(df["taxa_media"], window=252, min_periods=60)
-    df["z_1260"] = rolling_zscore(df["taxa_media"], window=1260, min_periods=315)
+    dates = df["data"].tolist()
+    rates = df["taxa_media"].astype(float).tolist()
+    prazos = df["prazo_anos"].astype(float).tolist()
 
     intro_lines = [
-        "z_entry_threshold grid: " + ", ".join(f"{z:.2f}" for z in z_values),
+        "entry_z grid: " + ", ".join(f"{value:.1f}" for value in entry_thresholds),
+        "z_rolling grid: " + ", ".join(str(value) for value in rolling_windows),
+        "exit_z grid: " + ", ".join(f"{value:.1f}" for value in exit_thresholds),
         f"duration_minima fixa: {duration_minima}",
-        f"saída fixa: zscore_rolling_252d <= {exit_threshold}",
-        "lógica operacional: início do stress + sizing defensivo",
-        "critério principal: ganho absoluto total",
+        "logica operacional: primeiro cruzamento do threshold de entrada e saida por reversao do zscore",
+        "pnl: aproximacao mark-to-market de NTN-B usando duration ~= prazo_anos na entrada",
+        "nao inclui carry real, IPCA, cupom, custos ou convexidade",
+        "criterio principal: score_total",
     ]
 
-    results = []
+    results: list[dict[str, float | int]] = []
 
-    for z_entry in z_values:
-        try:
-            work = df.copy()
+    for window in rolling_windows:
+        zscores = rolling_zscore(
+            df["taxa_media"],
+            window=window,
+        ).tolist()
 
-            work["entry_signal_raw"] = work["z_252"] >= z_entry
-            prev_signal = work["entry_signal_raw"].shift(1, fill_value=False)
-            work["entry_event"] = work["entry_signal_raw"] & (~prev_signal)
+        for entry_threshold in entry_thresholds:
+            for exit_threshold in exit_thresholds:
+                trades: list[dict[str, float | int | object]] = []
 
-            trades = []
+                in_trade = False
+                entry_idx: int | None = None
+                entry_date = None
+                entry_rate: float | None = None
+                entry_prazo: float | None = None
+                entry_zscore: float | None = None
+                prev_signal = False
 
-            in_trade = False
-            entry_idx = None
-            entry_date = None
-            entry_rate = None
-            entry_z252 = None
-            entry_z1260 = None
-            entry_weight = None
-            current_weight = None
+                for i, zscore in enumerate(zscores):
+                    rate = rates[i]
+                    prazo = prazos[i]
+                    dt = dates[i]
+                    signal = pd.notna(zscore) and zscore >= entry_threshold
+                    entry_event = signal and (not prev_signal)
+                    prev_signal = bool(signal)
 
-            add_20_done = False
-            add_25_done = False
-            add_30_done = False
+                    if not in_trade:
+                        if entry_event:
+                            in_trade = True
+                            entry_idx = i
+                            entry_date = dt
+                            entry_rate = rate
+                            entry_prazo = prazo
+                            entry_zscore = float(zscore)
+                    else:
+                        holding_days = i - entry_idx
 
-            for i, row in work.iterrows():
-                z252 = row["z_252"]
-                z1260 = row["z_1260"]
-                rate = float(row["taxa_media"])
-                dt = row["data"]
+                        if (
+                            pd.notna(zscore)
+                            and holding_days >= duration_minima
+                            and zscore <= exit_threshold
+                        ):
+                            exit_rate = rate
+                            rate_move = entry_rate - exit_rate
+                            duration = _approx_duration_from_prazo(entry_prazo)
+                            return_pct = _mark_to_market_return_pct(
+                                entry_rate_pct=entry_rate,
+                                exit_rate_pct=exit_rate,
+                                duration=duration,
+                            )
+                            score = base_notional * (return_pct / 100.0)
 
-                if not in_trade:
-                    if bool(row["entry_event"]):
-                        base_weight = (
-                            1.5
-                            if (pd.notna(z1260) and z1260 >= entry_threshold_1260_overlay)
-                            else 1.0
-                        )
+                            trades.append(
+                                {
+                                    "entry_date": entry_date,
+                                    "exit_date": dt,
+                                    "entry_zscore": entry_zscore,
+                                    "exit_zscore": float(zscore),
+                                    "entry_prazo": float(entry_prazo),
+                                    "duration": float(duration),
+                                    "holding_days": int(holding_days),
+                                    "rate_move": float(rate_move),
+                                    "score": float(score),
+                                    "return_pct": float(return_pct),
+                                }
+                            )
 
-                        in_trade = True
-                        entry_idx = i
-                        entry_date = dt
-                        entry_rate = rate
-                        entry_z252 = float(z252)
-                        entry_z1260 = float(z1260) if pd.notna(z1260) else None
-                        entry_weight = base_weight
-                        current_weight = base_weight
+                            in_trade = False
+                            entry_idx = None
+                            entry_date = None
+                            entry_rate = None
+                            entry_prazo = None
+                            entry_zscore = None
 
-                        add_20_done = False
-                        add_25_done = False
-                        add_30_done = False
+                trades_df = pd.DataFrame(trades)
 
+                if trades_df.empty:
+                    result = {
+                        "z_rolling": window,
+                        "z_entry_threshold": entry_threshold,
+                        "z_exit_threshold": exit_threshold,
+                        "trades": 0,
+                        "avg_return": float("nan"),
+                        "median_return": float("nan"),
+                        "win_rate": float("nan"),
+                        "score_total": float("nan"),
+                        "score_mean": float("nan"),
+                        "holding_mean": float("nan"),
+                    }
                 else:
-                    holding_days = i - entry_idx
+                    result = {
+                        "z_rolling": window,
+                        "z_entry_threshold": entry_threshold,
+                        "z_exit_threshold": exit_threshold,
+                        "trades": int(len(trades_df)),
+                        "avg_return": safe_mean(trades_df["return_pct"]),
+                        "median_return": safe_median(trades_df["return_pct"]),
+                        "win_rate": win_rate_pct(trades_df["score"]),
+                        "score_total": float(trades_df["score"].sum()),
+                        "score_mean": safe_mean(trades_df["score"]),
+                        "holding_mean": safe_mean(trades_df["holding_days"]),
+                    }
 
-                    new_weight = current_weight
+                results.append(result)
 
-                    if (not add_20_done) and pd.notna(z252) and z252 >= 2.0:
-                        new_weight += 0.5
-                        add_20_done = True
-
-                    if (not add_25_done) and pd.notna(z252) and z252 >= 2.5:
-                        new_weight += 1.0
-                        add_25_done = True
-
-                    if (not add_30_done) and pd.notna(z252) and z252 >= 3.0:
-                        new_weight += 1.5
-                        add_30_done = True
-
-                    current_weight = min(new_weight, 4.5)
-
-                    if pd.notna(z252) and holding_days >= duration_minima and z252 <= exit_threshold:
-                        exit_rate = rate
-                        rate_move = entry_rate - exit_rate
-                        score = base_notional * current_weight * rate_move
-
-                        return_pct = (score / (base_notional * entry_weight)) * 100.0
-
-                        trades.append(
-                            {
-                                "entry_date": entry_date,
-                                "exit_date": dt,
-                                "entry_z252": entry_z252,
-                                "entry_z1260": entry_z1260,
-                                "entry_weight": entry_weight,
-                                "exit_weight": current_weight,
-                                "holding_days": int(holding_days),
-                                "rate_move": float(rate_move),
-                                "score": float(score),
-                                "return_pct": float(return_pct),
-                            }
-                        )
-
-                        in_trade = False
-                        entry_idx = None
-                        entry_date = None
-                        entry_rate = None
-                        entry_z252 = None
-                        entry_z1260 = None
-                        entry_weight = None
-                        current_weight = None
-                        add_20_done = False
-                        add_25_done = False
-                        add_30_done = False
-
-            trades_df = pd.DataFrame(trades)
-
-            if trades_df.empty:
-                result = {
-                    "z_entry_threshold": z_entry,
-                    "duration_minima": duration_minima,
-                    "trades": 0,
-                    "discarded": 0,
-                    "avg_return": float("nan"),
-                    "median_return": float("nan"),
-                    "win_rate": float("nan"),
-                    "avg_absolute_pnl_units": float("nan"),
-                    "median_absolute_pnl_units": float("nan"),
-                    "total_absolute_pnl_units": float("nan"),
-                    "avg_holding": float("nan"),
-                    "avg_weight": float("nan"),
-                }
-            else:
-                result = {
-                    "z_entry_threshold": z_entry,
-                    "duration_minima": duration_minima,
-                    "trades": int(len(trades_df)),
-                    "discarded": 0,
-                    "avg_return": safe_mean(trades_df["return_pct"]),
-                    "median_return": safe_median(trades_df["return_pct"]),
-                    "win_rate": win_rate_pct(trades_df["score"]),
-                    "avg_absolute_pnl_units": safe_mean(trades_df["score"]),
-                    "median_absolute_pnl_units": safe_median(trades_df["score"]),
-                    "total_absolute_pnl_units": float(trades_df["score"].sum()),
-                    "avg_holding": safe_mean(trades_df["holding_days"]),
-                    "avg_weight": safe_mean(trades_df["exit_weight"]),
-                }
-
-            results.append(result)
-
-        except Exception as exc:
-            results.append({
-                "z_entry_threshold": z_entry,
-                "duration_minima": duration_minima,
-                "trades": 0,
-                "discarded": 0,
-                "avg_return": float("nan"),
-                "median_return": float("nan"),
-                "win_rate": float("nan"),
-                "avg_absolute_pnl_units": float("nan"),
-                "median_absolute_pnl_units": float("nan"),
-                "total_absolute_pnl_units": float("nan"),
-                "avg_holding": float("nan"),
-                "avg_weight": float("nan"),
-                "error": str(exc),
-            })
-
-    valid_results = [
-        r for r in results if not math.isnan(r["total_absolute_pnl_units"])
-    ]
-
-    grid_lines: list[str] = []
-    for r in results:
-        grid_lines.append(
-            f"z={r['z_entry_threshold']:.2f} | "
-            f"trades={r['trades']} | "
-            f"desc={r['discarded']} | "
-            f"ret_médio={r['avg_return'] if not math.isnan(r['avg_return']) else float('nan'):.2f}% | "
-            f"mediana={r['median_return'] if not math.isnan(r['median_return']) else float('nan'):.2f}% | "
-            f"win={r['win_rate'] if not math.isnan(r['win_rate']) else float('nan'):.1f}% | "
-            f"abs_médio={r['avg_absolute_pnl_units'] if not math.isnan(r['avg_absolute_pnl_units']) else float('nan'):.2f} | "
-            f"abs_total={r['total_absolute_pnl_units'] if not math.isnan(r['total_absolute_pnl_units']) else float('nan'):.2f} | "
-            f"holding={r['avg_holding'] if not math.isnan(r['avg_holding']) else float('nan'):.1f} | "
-            f"peso={r['avg_weight'] if not math.isnan(r['avg_weight']) else float('nan'):.2f}x"
-        )
-        if "error" in r:
-            grid_lines.append(f"  erro: {r['error']}")
+    valid_results = [r for r in results if not math.isnan(r["score_total"])]
+    sorted_results = sorted(
+        valid_results,
+        key=lambda item: (
+            item["score_total"],
+            item["avg_return"],
+            item["win_rate"],
+        ),
+        reverse=True,
+    )
 
     if not valid_results:
         report = build_result(
-            "BACKTEST: OTIMIZAÇÃO FINA DO THRESHOLD DE ENTRADA",
+            "BACKTEST: OTIMIZACAO GRID ZSCORE",
             section(intro_lines),
-            section(grid_lines + ["", "Nenhum resultado válido encontrado."], title="RESULTADOS DO GRID"),
+            section(
+                [
+                    f"combos_testados={len(results)}",
+                    "Nenhum resultado valido encontrado.",
+                ],
+                title="RESUMO",
+            ),
         )
         return render_result(report)
 
-    best_abs_total = max(valid_results, key=lambda x: x["total_absolute_pnl_units"])
-    best_abs_avg = max(valid_results, key=lambda x: x["avg_absolute_pnl_units"])
-    best_return_avg = max(valid_results, key=lambda x: x["avg_return"])
-    best_median = max(valid_results, key=lambda x: x["median_return"])
+    top_lines: list[str] = []
+    for window in rolling_windows:
+        window_results = [
+            row for row in sorted_results if row["z_rolling"] == window
+        ]
+        if not window_results:
+            continue
 
-    best_total_lines = [
-        f"z={best_abs_total['z_entry_threshold']:.2f} | "
-        f"abs_total={best_abs_total['total_absolute_pnl_units']:.2f} | "
-        f"abs_médio={best_abs_total['avg_absolute_pnl_units']:.2f} | "
-        f"ret_médio={best_abs_total['avg_return']:.2f}% | "
-        f"mediana={best_abs_total['median_return']:.2f}% | "
-        f"win={best_abs_total['win_rate']:.1f}% | "
-        f"trades={best_abs_total['trades']}"
+        top_lines.append(f"z_rolling={window}")
+        for idx, row in enumerate(window_results[:20], start=1):
+            top_lines.append(
+                f"{idx:02d}. "
+                f"entry>={row['z_entry_threshold']:.1f} | "
+                f"exit<={row['z_exit_threshold']:.1f} | "
+                f"trades={row['trades']} | "
+                f"score_total={row['score_total']:.2f} | "
+                f"score_medio={row['score_mean']:.2f} | "
+                f"ret_medio={row['avg_return']:.2f}% | "
+                f"mediana={row['median_return']:.2f}% | "
+                f"win={row['win_rate']:.1f}% | "
+                f"holding={row['holding_mean']:.1f}d"
+            )
+        top_lines.append("")
+
+    best_total = sorted_results[0]
+    best_avg_return = max(valid_results, key=lambda item: item["avg_return"])
+    best_median = max(valid_results, key=lambda item: item["median_return"])
+    best_win_rate = max(valid_results, key=lambda item: item["win_rate"])
+
+    summary_lines = [
+        f"combos_testados={len(results)}",
+        f"combos_validos={len(valid_results)}",
+        "top_por_z_rolling=20",
+        f"janelas_com_resultado={len({row['z_rolling'] for row in valid_results})}",
     ]
 
-    best_avg_lines = [
-        f"z={best_abs_avg['z_entry_threshold']:.2f} | "
-        f"abs_médio={best_abs_avg['avg_absolute_pnl_units']:.2f} | "
-        f"abs_total={best_abs_avg['total_absolute_pnl_units']:.2f} | "
-        f"ret_médio={best_abs_avg['avg_return']:.2f}% | "
-        f"mediana={best_abs_avg['median_return']:.2f}% | "
-        f"win={best_abs_avg['win_rate']:.1f}% | "
-        f"trades={best_abs_avg['trades']}"
+    best_total_lines = [
+        f"z_roll={best_total['z_rolling']} | "
+        f"entry>={best_total['z_entry_threshold']:.1f} | "
+        f"exit<={best_total['z_exit_threshold']:.1f} | "
+        f"score_total={best_total['score_total']:.2f} | "
+        f"score_medio={best_total['score_mean']:.2f} | "
+        f"ret_medio={best_total['avg_return']:.2f}% | "
+        f"win={best_total['win_rate']:.1f}% | "
+        f"trades={best_total['trades']}"
     ]
 
     best_return_lines = [
-        f"z={best_return_avg['z_entry_threshold']:.2f} | "
-        f"ret_médio={best_return_avg['avg_return']:.2f}% | "
-        f"mediana={best_return_avg['median_return']:.2f}% | "
-        f"abs_total={best_return_avg['total_absolute_pnl_units']:.2f} | "
-        f"win={best_return_avg['win_rate']:.1f}% | "
-        f"trades={best_return_avg['trades']}"
+        f"z_roll={best_avg_return['z_rolling']} | "
+        f"entry>={best_avg_return['z_entry_threshold']:.1f} | "
+        f"exit<={best_avg_return['z_exit_threshold']:.1f} | "
+        f"ret_medio={best_avg_return['avg_return']:.2f}% | "
+        f"score_total={best_avg_return['score_total']:.2f} | "
+        f"win={best_avg_return['win_rate']:.1f}% | "
+        f"trades={best_avg_return['trades']}"
     ]
 
     best_median_lines = [
-        f"z={best_median['z_entry_threshold']:.2f} | "
+        f"z_roll={best_median['z_rolling']} | "
+        f"entry>={best_median['z_entry_threshold']:.1f} | "
+        f"exit<={best_median['z_exit_threshold']:.1f} | "
         f"mediana={best_median['median_return']:.2f}% | "
-        f"ret_médio={best_median['avg_return']:.2f}% | "
-        f"abs_total={best_median['total_absolute_pnl_units']:.2f} | "
+        f"score_total={best_median['score_total']:.2f} | "
         f"win={best_median['win_rate']:.1f}% | "
         f"trades={best_median['trades']}"
     ]
 
+    best_win_lines = [
+        f"z_roll={best_win_rate['z_rolling']} | "
+        f"entry>={best_win_rate['z_entry_threshold']:.1f} | "
+        f"exit<={best_win_rate['z_exit_threshold']:.1f} | "
+        f"win={best_win_rate['win_rate']:.1f}% | "
+        f"score_total={best_win_rate['score_total']:.2f} | "
+        f"ret_medio={best_win_rate['avg_return']:.2f}% | "
+        f"trades={best_win_rate['trades']}"
+    ]
+
     report = build_result(
-        "BACKTEST: OTIMIZAÇÃO FINA DO THRESHOLD DE ENTRADA",
+        "BACKTEST: OTIMIZACAO GRID ZSCORE",
         section(intro_lines),
-        section(grid_lines, title="RESULTADOS DO GRID"),
-        section(best_total_lines, title="MELHOR POR GANHO ABSOLUTO TOTAL"),
-        section(best_avg_lines, title="MELHOR POR GANHO ABSOLUTO MÉDIO"),
-        section(best_return_lines, title="MELHOR POR RETORNO MÉDIO"),
+        section(summary_lines, title="RESUMO"),
+        section(best_total_lines, title="MELHOR POR SCORE TOTAL"),
+        section(best_return_lines, title="MELHOR POR RETORNO MEDIO"),
         section(best_median_lines, title="MELHOR POR MEDIANA"),
+        section(best_win_lines, title="MELHOR POR WIN RATE"),
+        section(top_lines, title="TOP 20 POR Z_ROLLING"),
     )
     return render_result(report)
 
@@ -579,6 +589,6 @@ def backtest_realrate_state_of_art() -> str:
 
 __all__ = [
     "backtest_optimize_entry_threshold_fine",
+    "backtest_optimize_zscore_grid",
     "backtest_realrate_state_of_art",
 ]
-
