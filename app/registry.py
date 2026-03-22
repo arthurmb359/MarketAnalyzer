@@ -36,7 +36,7 @@ def create_backtest_registry() -> BacktestRegistry:
 
     registry.register("IPCA+ Entry Signal", backtest_ipca_entry_signal)
     registry.register(
-        "Optimize Zscore Grid (Multiple Z-Rolling, Entries and Exits from 252d to 1242d )",
+        "Optimize Zscore Grid (Multiple Z-Rolling, Entries and Exits from 1852d to 7300d )",
         backtest_optimize_zscore_grid,
     )
     registry.register("IPCA+ State of Art", backtest_realrate_state_of_art)

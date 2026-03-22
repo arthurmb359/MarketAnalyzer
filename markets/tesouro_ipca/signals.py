@@ -1,9 +1,9 @@
 import math
+import math
 
 import pandas as pd
 
 from core.features import rolling_zscore
-from core.metrics import safe_mean, safe_median
 from core.reporting import format_date, format_value, render_result, result as build_result, section
 from markets.tesouro_ipca.loader import load_ipca_long_research_frame
 
@@ -13,12 +13,11 @@ def backtest_ipca_entry_signal() -> str:
     Sinal operacional atual do IPCA+.
 
     Mostra:
-    - z atual
+    - z_2412 atual
     - threshold de entrada
-    - regime atual do z (subida / queda / neutro)
-    - decisao de entrada
-    - estimativa historica de tempo ate o proximo z >= 2.0
-      condicionada ao regime atual
+    - nivel de alocacao sugerido
+    - condicao de saida
+    - decisao operacional atual
     """
     df = load_ipca_long_research_frame(duration_minima=0.0).copy()
     df = (
@@ -27,141 +26,75 @@ def backtest_ipca_entry_signal() -> str:
         .reset_index(drop=True)
     )
 
-    entry_threshold = 2.0
-    trend_lookback = 21
-    neutral_band = 0.10
+    entry_threshold = 1.2
+    add_threshold_mid = 1.6
+    add_threshold_high = 2.0
+    exit_threshold = -2.0
 
-    df["z_252"] = rolling_zscore(df["taxa_media"], window=252, min_periods=60)
-    df["z_1260"] = rolling_zscore(df["taxa_media"], window=1260, min_periods=315)
-    df["z_trend_21d"] = df["z_252"] - df["z_252"].shift(trend_lookback)
+    df["z_2412"] = rolling_zscore(df["taxa_media"], window=2412, min_periods=603)
 
-    def classify_regime(z_trend: float) -> str:
-        if pd.isna(z_trend):
-            return "indefinido"
-        if z_trend > neutral_band:
-            return "subida"
-        if z_trend < -neutral_band:
-            return "queda"
-        return "neutro"
-
-    df["z_regime"] = df["z_trend_21d"].apply(classify_regime)
-
-    next_entry_days = []
-    z_values = df["z_252"].tolist()
-
-    for i in range(len(df)):
-        days_to_next = math.nan
-        for j in range(i + 1, len(df)):
-            z_next = z_values[j]
-            if pd.notna(z_next) and z_next >= entry_threshold:
-                days_to_next = j - i
-                break
-        next_entry_days.append(days_to_next)
-
-    df["days_to_next_entry"] = next_entry_days
-
-    valid = df.dropna(subset=["z_252", "days_to_next_entry"]).copy()
-
-    regime_stats = {}
-    for regime in ["subida", "queda", "neutro"]:
-        subset = valid[valid["z_regime"] == regime].copy()
-        if subset.empty:
-            regime_stats[regime] = None
-            continue
-
-        avg_days = safe_mean(subset["days_to_next_entry"])
-        median_days = safe_median(subset["days_to_next_entry"])
-
-        regime_stats[regime] = {
-            "count": int(len(subset)),
-            "avg_days": avg_days,
-            "median_days": median_days,
-            "avg_years": avg_days / 252.0,
-            "median_years": median_days / 252.0,
-        }
-
-    current = df.dropna(subset=["z_252"]).iloc[-1]
+    current = df.dropna(subset=["z_2412"]).iloc[-1]
 
     current_date = current["data"]
     current_rate = float(current["taxa_media"])
-    current_z252 = float(current["z_252"])
-    current_z1260 = float(current["z_1260"]) if pd.notna(current["z_1260"]) else math.nan
-    current_trend = float(current["z_trend_21d"]) if pd.notna(current["z_trend_21d"]) else math.nan
-    current_regime = current["z_regime"]
+    current_z2412 = float(current["z_2412"])
 
-    enter_now = current_z252 >= entry_threshold
-    distance_to_entry = entry_threshold - current_z252
+    enter_now = current_z2412 >= entry_threshold
+    exit_now = current_z2412 <= exit_threshold
 
-    stats = regime_stats.get(current_regime)
-    if stats is not None:
-        est_avg_years = stats["avg_years"]
-        est_median_years = stats["median_years"]
-        est_avg_days = stats["avg_days"]
-        est_median_days = stats["median_days"]
-        stats_count = stats["count"]
+    if current_z2412 >= add_threshold_high:
+        target_weight = 4.0
+        allocation_status = "Escalonamento completo"
+    elif current_z2412 >= add_threshold_mid:
+        target_weight = 2.0
+        allocation_status = "Primeiro escalonamento ativo"
+    elif current_z2412 >= entry_threshold:
+        target_weight = 1.0
+        allocation_status = "Entrada base ativa"
     else:
-        est_avg_years = math.nan
-        est_median_years = math.nan
-        est_avg_days = math.nan
-        est_median_days = math.nan
-        stats_count = 0
+        target_weight = 0.0
+        allocation_status = "Fora da faixa de entrada"
+
+    distance_to_entry = entry_threshold - current_z2412
+    distance_to_exit = current_z2412 - exit_threshold
 
     intro_lines = [
         f"Data atual da serie: {format_date(current_date)}",
         f"Taxa real atual: {format_value(current_rate)}",
-        f"z_252 atual: {format_value(current_z252)}",
-        (
-            f"z_1260 atual: {format_value(current_z1260)}"
-            if not math.isnan(current_z1260)
-            else "z_1260 atual: nan"
-        ),
+        f"z_2412 atual: {format_value(current_z2412)}",
         f"threshold de entrada: {format_value(entry_threshold)}",
+        f"threshold de saida: {format_value(exit_threshold)}",
         f"distancia ate entrada: {distance_to_entry:+.2f}",
+        f"distancia ate saida: {distance_to_exit:+.2f}",
         "",
-        (
-            f"tendencia do z (21d): {current_trend:+.2f}"
-            if not math.isnan(current_trend)
-            else "tendencia do z (21d): nan"
-        ),
-        f"regime atual: {current_regime}",
+        f"alocacao alvo: {target_weight:.1f}x",
+        f"status da alocacao: {allocation_status}",
     ]
 
     decisao_lines: list[str] = []
-    if enter_now:
-        decisao_lines.append("SINAL: ENTRA")
-        decisao_lines.append("Motivo: z_252 atual ja esta em ou acima do threshold operacional.")
+    if exit_now:
+        decisao_lines.append("SINAL: SAIDA / ZERA")
+        decisao_lines.append("Motivo: z_2412 atual ja esta em ou abaixo do threshold de saida.")
+    elif enter_now:
+        decisao_lines.append("SINAL: ENTRA / MANTEM")
+        decisao_lines.append("Motivo: z_2412 atual ja esta em ou acima do threshold operacional.")
     else:
         decisao_lines.append("SINAL: NAO ENTRA")
-        decisao_lines.append("Motivo: z_252 atual ainda esta abaixo do threshold operacional.")
+        decisao_lines.append("Motivo: z_2412 atual ainda esta abaixo do threshold operacional.")
 
-    estimativa_lines: list[str] = []
-    if stats_count > 0:
-        estimativa_lines.append(
-            f"Condicional ao regime atual ({current_regime}), usando {stats_count} observacoes historicas:"
-        )
-        estimativa_lines.append(f"media: {est_avg_days:.1f} dias uteis (~{est_avg_years:.2f} anos)")
-        estimativa_lines.append(f"mediana: {est_median_days:.1f} dias uteis (~{est_median_years:.2f} anos)")
-    else:
-        estimativa_lines.append("Sem observacoes suficientes para estimar o tempo ate a proxima entrada neste regime.")
-
-    resumo_lines: list[str] = []
-    for regime in ["subida", "neutro", "queda"]:
-        regime_stat = regime_stats.get(regime)
-        if regime_stat is None:
-            resumo_lines.append(f"{regime}: sem dados")
-        else:
-            resumo_lines.append(
-                f"{regime}: n={regime_stat['count']} | "
-                f"media={regime_stat['avg_days']:.1f} dias (~{regime_stat['avg_years']:.2f} anos) | "
-                f"mediana={regime_stat['median_days']:.1f} dias (~{regime_stat['median_years']:.2f} anos)"
-            )
+    estrategia_lines = [
+        f"Entrada base: z_2412 >= {entry_threshold:.1f} -> 1.0x",
+        f"Escalonamento 1: z_2412 >= {add_threshold_mid:.1f} -> +1.0x",
+        f"Escalonamento 2: z_2412 >= {add_threshold_high:.1f} -> +2.0x",
+        "Peso maximo: 4.0x",
+        f"Saida: z_2412 <= {exit_threshold:.1f}",
+    ]
 
     report = build_result(
         "IPCA+ ENTRY SIGNAL",
         section(intro_lines),
         section(decisao_lines, title="DECISAO OPERACIONAL"),
-        section(estimativa_lines, title="ESTIMATIVA HISTORICA ATE PROXIMA ENTRADA"),
-        section(resumo_lines, title="RESUMO POR REGIME"),
+        section(estrategia_lines, title="REGRAS DA ESTRATEGIA"),
     )
     return render_result(report)
 

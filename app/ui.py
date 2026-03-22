@@ -247,15 +247,6 @@ class MarketAnalyzerWindow:
             self.series_view_label.configure(text="View: Taxa")
         else:
             self._plot_series_column(
-                "zscore",
-                x,
-                "Historical z-score",
-                linewidth=1.0,
-                linestyle="--",
-                alpha=0.6,
-                color="gray",
-            )
-            self._plot_series_column(
                 "zscore_rolling_252d",
                 x,
                 "Z-score 252d",
@@ -263,25 +254,18 @@ class MarketAnalyzerWindow:
                 color="blue",
             )
             self._plot_series_column(
-                "zscore_rolling_522d",
-                x,
-                "Z-score 522d",
-                linewidth=1.4,
-                color="orange",
-            )
-            self._plot_series_column(
-                "zscore_rolling_882d",
-                x,
-                "Z-score 882d",
-                linewidth=1.4,
-                color="purple",
-            )
-            self._plot_series_column(
                 "zscore_rolling_1242d",
                 x,
                 "Z-score 1242d",
                 linewidth=1.4,
                 color="green",
+            )
+            self._plot_series_column(
+                "zscore_rolling_2412d",
+                x,
+                "Z-score 2412d",
+                linewidth=1.4,
+                color="brown",
             )
 
             self.series_ax.axhline(0, linestyle="--", linewidth=1.0, color="black")
@@ -358,7 +342,7 @@ class MarketAnalyzerWindow:
 
             df[z_col] = (df["taxa_media"] - df[mean_col]) / df[std_col]
 
-        for window in [252, 522, 882, 1242]:
+        for window in [252, 522, 882, 1242, 2412]:
             add_rolling_zscore(daily, window)
 
         return daily

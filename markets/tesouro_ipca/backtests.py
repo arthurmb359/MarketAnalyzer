@@ -40,7 +40,7 @@ def _mark_to_market_return_pct(
 
 def backtest_optimize_zscore_grid() -> str:
     entry_thresholds = _float_range(1.0, 3.0, 0.2)
-    rolling_windows = _int_range(252, 1242, 90)
+    rolling_windows = _int_range(1852, 7300, 730)
     exit_thresholds = [-value for value in _float_range(1.0, 2.0, 0.2)]
     duration_minima = 15
     base_notional = 100.0
@@ -293,23 +293,17 @@ def backtest_realrate_state_of_art() -> str:
     Estado da arte atual do sistema Real Rate / IPCA+.
 
     Modo operacional:
-    - entrada no INÍCIO do stress
-    - evento = primeiro cruzamento de z_252 >= 2.0
+    - entrada pelo primeiro cruzamento de z_2412 >= 1.2
 
-    Peso inicial:
-    - 1.0x se z_1260 < 1.2
-    - 1.5x se z_1260 >= 1.2
-
-    Escalonamento tático agressivo:
-    - z_252 >= 2.5 -> +1.0x
-    - z_252 >= 3.0 -> +1.5x
-    - z_252 >= 3.5 -> +2.5x
+    Escalonamento de entrada via z_2412:
+    - z_2412 >= 1.6 -> +1.0x
+    - z_2412 >= 2.0 -> +2.0x
 
     Peso máximo efetivo:
-    - 6.5x
+    - 4.0x
 
     Saída:
-    - z_252 <= -2.0
+    - z_2412 <= -2.0
     - duration_minima = 15
 
     Métricas de stress:
@@ -329,8 +323,9 @@ def backtest_realrate_state_of_art() -> str:
         .reset_index(drop=True)
     )
 
-    entry_threshold_252 = 2.0
-    entry_threshold_1260_overlay = 1.2
+    entry_threshold_2412 = 1.2
+    add_threshold_2412_mid = 1.6
+    add_threshold_2412_high = 2.0
     exit_threshold = -2.0
     duration_minima = 15
     base_notional = 100.0
@@ -338,165 +333,163 @@ def backtest_realrate_state_of_art() -> str:
     # fração conservadora da taxa real usada como carry aproveitável
     carry_proxy_fraction = 0.30
 
-    def base_entry_weight(z1260: float) -> float:
-        return 1.5 if (pd.notna(z1260) and z1260 >= entry_threshold_1260_overlay) else 1.0
+    df["z_2412"] = rolling_zscore(df["taxa_media"], window=2412, min_periods=603)
 
-    df["z_252"] = rolling_zscore(df["taxa_media"], window=252, min_periods=60)
-    df["z_1260"] = rolling_zscore(df["taxa_media"], window=1260, min_periods=315)
-
-    # entrada = primeiro cruzamento do stress
-    df["entry_signal_raw"] = df["z_252"] >= entry_threshold_252
+    df["entry_signal_raw"] = df["z_2412"] >= entry_threshold_2412
     prev_signal = df["entry_signal_raw"].shift(1, fill_value=False)
     df["entry_event"] = df["entry_signal_raw"] & (~prev_signal)
 
     trades = []
-
-    in_trade = False
-    entry_idx = None
-    entry_date = None
-    entry_rate = None
-    entry_z252 = None
-    entry_z1260 = None
-    entry_weight = None
-
-    current_weight = None
-    worst_mtm_pnl = None
-    worst_mtm_date = None
-    worst_mtm_rate = None
-    weight_at_dd = None
-
-    add_25_done = False
-    add_30_done = False
-    add_35_done = False
+    open_position: dict[str, object] | None = None
 
     for i, row in df.iterrows():
-        z252 = row["z_252"]
-        z1260 = row["z_1260"]
+        z2412 = row["z_2412"]
         rate = float(row["taxa_media"])
         dt = row["data"]
 
-        if not in_trade:
-            if bool(row["entry_event"]):
-                weight = base_entry_weight(z1260)
+        if bool(row["entry_event"]) and open_position is None:
+            open_position = {
+                "entry_idx": i,
+                "entry_date": dt,
+                "entry_rate": rate,
+                "entry_z2412": float(z2412),
+                "entry_weight": 1.0,
+                "current_weight": 1.0,
+                "worst_mtm_pnl": 0.0,
+                "worst_mtm_date": None,
+                "worst_mtm_rate": rate,
+                "weight_at_dd": 1.0,
+                "hit_16": False,
+                "hit_20": False,
+            }
 
-                in_trade = True
-                entry_idx = i
-                entry_date = dt
-                entry_rate = rate
-                entry_z252 = float(z252)
-                entry_z1260 = float(z1260) if pd.notna(z1260) else None
-                entry_weight = weight
-
-                current_weight = weight
-                add_25_done = False
-                add_30_done = False
-                add_35_done = False
-
-                worst_mtm_pnl = 0.0
-                worst_mtm_date = None
-                worst_mtm_rate = entry_rate
-                weight_at_dd = current_weight
-
-        else:
+        if open_position is not None:
+            entry_idx = int(open_position["entry_idx"])
+            entry_rate = float(open_position["entry_rate"])
             holding_days = i - entry_idx
+            current_weight = float(open_position["current_weight"])
 
-            # escalonamento progressivo agressivo
             new_weight = current_weight
 
-            if (not add_25_done) and pd.notna(z252) and z252 >= 2.5:
+            if (not bool(open_position["hit_16"])) and pd.notna(z2412) and z2412 >= add_threshold_2412_mid:
                 new_weight += 1.0
-                add_25_done = True
+                open_position["hit_16"] = True
 
-            if (not add_30_done) and pd.notna(z252) and z252 >= 3.0:
-                new_weight += 1.5
-                add_30_done = True
+            if (not bool(open_position["hit_20"])) and pd.notna(z2412) and z2412 >= add_threshold_2412_high:
+                new_weight += 2.0
+                open_position["hit_20"] = True
 
-            if (not add_35_done) and pd.notna(z252) and z252 >= 3.5:
-                new_weight += 2.5
-                add_35_done = True
+            current_weight = min(new_weight, 4.0)
+            open_position["current_weight"] = current_weight
 
-            current_weight = min(new_weight, 6.5)
-
-            # MTM simplificado usando peso corrente
             mtm_pnl = base_notional * current_weight * (entry_rate - rate)
 
-            if mtm_pnl < worst_mtm_pnl:
-                worst_mtm_pnl = mtm_pnl
-                worst_mtm_date = dt
-                worst_mtm_rate = rate
-                weight_at_dd = current_weight
+            if mtm_pnl < float(open_position["worst_mtm_pnl"]):
+                open_position["worst_mtm_pnl"] = mtm_pnl
+                open_position["worst_mtm_date"] = dt
+                open_position["worst_mtm_rate"] = rate
+                open_position["weight_at_dd"] = current_weight
 
-            if pd.notna(z252) and holding_days >= duration_minima and z252 <= exit_threshold:
+            if pd.notna(z2412) and holding_days >= duration_minima and z2412 <= exit_threshold:
                 exit_rate = rate
                 rate_move = entry_rate - exit_rate
                 score = base_notional * current_weight * rate_move
 
-                # carry proxy anual no ponto do DD
                 carry_proxy_anual = (
                     base_notional
-                    * (weight_at_dd if weight_at_dd is not None else current_weight)
+                    * float(open_position["weight_at_dd"])
                     * entry_rate
                     * carry_proxy_fraction
                 )
 
                 if carry_proxy_anual > 0:
-                    anos_para_recuperar_dd = abs(worst_mtm_pnl) / carry_proxy_anual
+                    anos_para_recuperar_dd = abs(float(open_position["worst_mtm_pnl"])) / carry_proxy_anual
                 else:
                     anos_para_recuperar_dd = math.nan
 
                 trades.append(
                     {
-                        "entry_date": entry_date,
+                        "entry_date": open_position["entry_date"],
                         "exit_date": dt,
                         "entry_rate": entry_rate,
                         "exit_rate": exit_rate,
-                        "entry_z252": entry_z252,
-                        "entry_z1260": entry_z1260,
-                        "entry_weight": entry_weight,
-                        "exit_weight": current_weight,
-                        "exit_z252": float(z252),
+                        "entry_z2412": open_position["entry_z2412"],
+                        "entry_weight": float(open_position["entry_weight"]),
+                        "max_weight": current_weight,
+                        "exit_z2412": float(z2412),
                         "holding_days": int(holding_days),
                         "rate_move": float(rate_move),
                         "score": float(score),
-                        "max_drawdown_score": float(worst_mtm_pnl),
-                        "max_drawdown_date": worst_mtm_date,
-                        "max_drawdown_rate": float(worst_mtm_rate - entry_rate) if worst_mtm_date is not None else 0.0,
-                        "weight_at_dd": float(weight_at_dd) if weight_at_dd is not None else 0.0,
+                        "max_drawdown_score": float(open_position["worst_mtm_pnl"]),
+                        "max_drawdown_date": open_position["worst_mtm_date"],
+                        "max_drawdown_rate": float(float(open_position["worst_mtm_rate"]) - entry_rate)
+                        if open_position["worst_mtm_date"] is not None
+                        else 0.0,
+                        "weight_at_dd": float(open_position["weight_at_dd"]),
                         "carry_proxy_anual": float(carry_proxy_anual),
                         "anos_para_recuperar_dd": float(anos_para_recuperar_dd) if not math.isnan(anos_para_recuperar_dd) else None,
-                        "hit_25": add_25_done,
-                        "hit_30": add_30_done,
-                        "hit_35": add_35_done,
+                        "is_open": False,
                     }
                 )
 
-                in_trade = False
-                entry_idx = None
-                entry_date = None
-                entry_rate = None
-                entry_z252 = None
-                entry_z1260 = None
-                entry_weight = None
-                current_weight = None
-                worst_mtm_pnl = None
-                worst_mtm_date = None
-                worst_mtm_rate = None
-                weight_at_dd = None
-                add_25_done = False
-                add_30_done = False
-                add_35_done = False
+                open_position = None
+
+    if open_position is not None and not df.empty:
+        last_row = df.iloc[-1]
+        exit_date = last_row["data"]
+        exit_rate = float(last_row["taxa_media"])
+        exit_z2412 = last_row["z_2412"]
+        entry_rate = float(open_position["entry_rate"])
+        current_weight = float(open_position["current_weight"])
+        holding_days = (len(df) - 1) - int(open_position["entry_idx"])
+        rate_move = entry_rate - exit_rate
+        score = base_notional * current_weight * rate_move
+
+        carry_proxy_anual = (
+            base_notional
+            * float(open_position["weight_at_dd"])
+            * entry_rate
+            * carry_proxy_fraction
+        )
+
+        if carry_proxy_anual > 0:
+            anos_para_recuperar_dd = abs(float(open_position["worst_mtm_pnl"])) / carry_proxy_anual
+        else:
+            anos_para_recuperar_dd = math.nan
+
+        trades.append(
+            {
+                "entry_date": open_position["entry_date"],
+                "exit_date": exit_date,
+                "entry_rate": entry_rate,
+                "exit_rate": exit_rate,
+                "entry_z2412": open_position["entry_z2412"],
+                "entry_weight": float(open_position["entry_weight"]),
+                "max_weight": current_weight,
+                "exit_z2412": float(exit_z2412) if pd.notna(exit_z2412) else None,
+                "holding_days": int(holding_days),
+                "rate_move": float(rate_move),
+                "score": float(score),
+                "max_drawdown_score": float(open_position["worst_mtm_pnl"]),
+                "max_drawdown_date": open_position["worst_mtm_date"],
+                "max_drawdown_rate": float(float(open_position["worst_mtm_rate"]) - entry_rate)
+                if open_position["worst_mtm_date"] is not None
+                else 0.0,
+                "weight_at_dd": float(open_position["weight_at_dd"]),
+                "carry_proxy_anual": float(carry_proxy_anual),
+                "anos_para_recuperar_dd": float(anos_para_recuperar_dd) if not math.isnan(anos_para_recuperar_dd) else None,
+                "is_open": True,
+            }
+        )
 
     intro_lines = [
         "Regras do sistema:",
-        f"Entrada: primeiro cruzamento de z_252 >= {entry_threshold_252:.1f}",
-        f"Peso inicial: 1.0x se z_1260 < {entry_threshold_1260_overlay:.1f}",
-        f"Peso inicial: 1.5x se z_1260 >= {entry_threshold_1260_overlay:.1f}",
-        "Escalonamento tático agressivo:",
-        "z_252 >= 2.5 -> +1.0x",
-        "z_252 >= 3.0 -> +1.5x",
-        "z_252 >= 3.5 -> +2.5x",
-        "Peso máximo: 6.5x",
-        f"Saída: z_252 <= {exit_threshold:.1f}",
+        f"Entrada: primeiro cruzamento de z_2412 >= {entry_threshold_2412:.1f}",
+        "Peso inicial na entrada: 1.0x",
+        f"Escalonamento: z_2412 >= {add_threshold_2412_mid:.1f} -> +1.0x",
+        f"Escalonamento: z_2412 >= {add_threshold_2412_high:.1f} -> +2.0x",
+        "Peso máximo: 4.0x",
+        f"Saída: z_2412 <= {exit_threshold:.1f}",
         f"Duração mínima: {duration_minima} dias",
         "",
         "Stress econômico aproximado:",
@@ -520,7 +513,7 @@ def backtest_realrate_state_of_art() -> str:
     score_mean = safe_mean(trades_df["score"])
     holding_mean = safe_mean(trades_df["holding_days"])
     entry_weight_mean = safe_mean(trades_df["entry_weight"])
-    exit_weight_mean = safe_mean(trades_df["exit_weight"])
+    max_weight_mean = safe_mean(trades_df["max_weight"])
 
     dd_mean = safe_mean(trades_df["max_drawdown_score"])
     dd_worst = trades_df["max_drawdown_score"].min()
@@ -531,6 +524,7 @@ def backtest_realrate_state_of_art() -> str:
 
     resumo_lines = [
         f"trades={len(trades_df)}",
+        f"trades_abertos={int(trades_df['is_open'].fillna(False).sum())}",
         f"win={win_rate:.1f}%",
         f"rate_move_médio={rate_move_mean:.4f}",
         f"rate_move_mediana={rate_move_median:.4f}",
@@ -538,7 +532,7 @@ def backtest_realrate_state_of_art() -> str:
         f"score_total={score_total:.2f}",
         f"holding_médio={holding_mean:.1f}d",
         f"peso_inicial_médio={entry_weight_mean:.2f}x",
-        f"peso_final_médio={exit_weight_mean:.2f}x",
+        f"peso_máximo_médio={max_weight_mean:.2f}x",
         f"drawdown_médio_mark_to_market={dd_mean:.2f}",
         f"pior_drawdown_mark_to_market={dd_worst:.2f}",
         f"carry_proxy_anual_médio={carry_proxy_mean:.2f}",
@@ -548,7 +542,7 @@ def backtest_realrate_state_of_art() -> str:
 
     detalhe_lines: list[str] = []
     for _, row in trades_df.iterrows():
-        z1260_txt = "nan" if pd.isna(row["entry_z1260"]) else f"{row['entry_z1260']:.2f}"
+        z2412_txt = "nan" if pd.isna(row["entry_z2412"]) else f"{row['entry_z2412']:.2f}"
         dd_date_txt = (
             row["max_drawdown_date"].strftime("%d/%m/%Y")
             if pd.notna(row["max_drawdown_date"])
@@ -562,13 +556,10 @@ def backtest_realrate_state_of_art() -> str:
 
         detalhe_lines.append(
             f"{row['entry_date'].strftime('%d/%m/%Y')} -> {row['exit_date'].strftime('%d/%m/%Y')} | "
-            f"z252={row['entry_z252']:.2f} | "
-            f"z1260={z1260_txt} | "
+            f"status={'aberto' if bool(row.get('is_open', False)) else 'fechado'} | "
+            f"z2412={z2412_txt} | "
             f"peso_in={row['entry_weight']:.2f}x | "
-            f"peso_out={row['exit_weight']:.2f}x | "
-            f"hit2.5={'Y' if row['hit_25'] else 'N'} | "
-            f"hit3.0={'Y' if row['hit_30'] else 'N'} | "
-            f"hit3.5={'Y' if row['hit_35'] else 'N'} | "
+            f"peso_max={row['max_weight']:.2f}x | "
             f"rate_move={row['rate_move']:+.4f} | "
             f"score={row['score']:.2f} | "
             f"maxDD_MTM={row['max_drawdown_score']:.2f} | "
