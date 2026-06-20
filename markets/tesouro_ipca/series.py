@@ -61,4 +61,44 @@ def build_daily_ipca_long_series(df: pd.DataFrame) -> pd.DataFrame:
     return daily
 
 
-__all__ = ["build_daily_ipca_long_series"]
+def build_daily_ipca_duration_bucket_series(
+    df: pd.DataFrame,
+    min_prazo_anos: float,
+    max_prazo_anos: float,
+    *,
+    include_max: bool = False,
+) -> pd.DataFrame:
+    if include_max:
+        filtered = df[
+            (df["Prazo_anos"] >= min_prazo_anos)
+            & (df["Prazo_anos"] <= max_prazo_anos)
+        ].copy()
+    else:
+        filtered = df[
+            (df["Prazo_anos"] >= min_prazo_anos)
+            & (df["Prazo_anos"] < max_prazo_anos)
+        ].copy()
+
+    if filtered.empty:
+        return pd.DataFrame(
+            columns=["data", "taxa_media", "prazo_anos", "data_vencimento"]
+        )
+
+    idx = filtered.groupby("Data Base")["Prazo_anos"].idxmax()
+    daily = filtered.loc[idx].copy()
+    daily = daily.sort_values(["Data Base", "Data Vencimento"]).copy()
+    daily = daily.sort_values("Data Base").reset_index(drop=True)
+
+    daily = daily.rename(
+        columns={
+            "Data Base": "data",
+            "Taxa Compra Manha": "taxa_media",
+            "Prazo_anos": "prazo_anos",
+            "Data Vencimento": "data_vencimento",
+        }
+    )
+
+    return daily[["data", "taxa_media", "prazo_anos", "data_vencimento"]].copy()
+
+
+__all__ = ["build_daily_ipca_duration_bucket_series", "build_daily_ipca_long_series"]

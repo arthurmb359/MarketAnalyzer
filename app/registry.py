@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Callable
 
 from markets.tesouro_ipca.backtests import (
+    backtest_optimize_realrate_state_of_art_by_duration,
     backtest_optimize_zscore_grid,
     backtest_realrate_state_of_art,
 )
@@ -40,6 +41,10 @@ def create_backtest_registry() -> BacktestRegistry:
         backtest_optimize_zscore_grid,
     )
     registry.register("IPCA+ State of Art", backtest_realrate_state_of_art)
+    registry.register(
+        "Optimize IPCA+ State of Art by Duration",
+        backtest_optimize_realrate_state_of_art_by_duration,
+    )
     # registry.register("FX Regime Event Sensitivity", backtest_fx_regime_event_sensitivity)
     # registry.register("Real Rate Trade by FX Regime", backtest_realrate_trade_by_fx_regime)
     # registry.register(
