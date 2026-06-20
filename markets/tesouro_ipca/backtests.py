@@ -448,7 +448,7 @@ def backtest_realrate_state_of_art() -> str:
                 continue
 
             current_rate, current_pu_compra, _current_pu_venda, quote_date, is_last_available_quote = current_quote
-            holding_days = i - entry_idx
+            holding_obs = i - entry_idx
             current_weight = float(open_position["current_weight"])
 
             if "entry_pu_venda" not in open_position:
@@ -491,7 +491,7 @@ def backtest_realrate_state_of_art() -> str:
 
             should_exit = (
                 pd.notna(z2412)
-                and holding_days >= holding_minimo_dias
+                and holding_obs >= holding_minimo_dias
                 and z2412 <= exit_threshold
             )
             is_last_row = i == len(df) - 1
@@ -499,6 +499,13 @@ def backtest_realrate_state_of_art() -> str:
 
             if should_exit or forced_exit or is_last_row:
                 exit_date = quote_date if forced_exit else dt
+                holding_days = (pd.Timestamp(exit_date) - pd.Timestamp(open_position["entry_date"])).days
+                if should_exit:
+                    exit_reason = "z_saida"
+                elif forced_exit:
+                    exit_reason = "vencimento_ou_ultima_cotacao"
+                else:
+                    exit_reason = "aberto"
                 exit_rate = current_rate
                 rate_move = entry_rate - exit_rate
                 return_pct = _pu_return_pct(
@@ -534,6 +541,7 @@ def backtest_realrate_state_of_art() -> str:
                         "entry_weight": float(open_position["entry_weight"]),
                         "max_weight": current_weight,
                         "holding_days": int(holding_days),
+                        "holding_obs": int(holding_obs),
                         "rate_move": float(rate_move),
                         "return_pct": float(return_pct),
                         "score": float(score),
@@ -543,6 +551,7 @@ def backtest_realrate_state_of_art() -> str:
                         "carry_proxy_anual": float(carry_proxy_anual),
                         "anos_para_recuperar_dd": float(anos_para_recuperar_dd) if not math.isnan(anos_para_recuperar_dd) else None,
                         "is_open": bool(is_last_row and not should_exit and not forced_exit),
+                        "exit_reason": exit_reason,
                     }
                 )
                 open_position = None
@@ -586,12 +595,13 @@ def backtest_realrate_state_of_art() -> str:
             detail_lines.append(
                 f"{trade['entry_date'].strftime('%d/%m/%Y')} -> {trade['exit_date'].strftime('%d/%m/%Y')} | "
                 f"status={'aberto' if bool(trade['is_open']) else 'fechado'} | "
+                f"saida={trade['exit_reason']} | "
                 f"taxa_compra={trade['entry_rate']:.2f} | venc={venc_txt} | prazo={trade['entry_prazo']:.2f} | "
                 f"pu_entrada={trade['entry_pu_venda']:.2f} | pu_saida={trade['exit_pu_compra']:.2f} | "
                 f"z2412={z_txt} | peso_max={trade['max_weight']:.2f}x | "
                 f"rate_move={trade['rate_move']:+.4f} | ret_pu={trade['return_pct']:.2f}% | "
                 f"score={trade['score']:.2f} | maxDD_PU={trade['max_drawdown_score']:.2f} | "
-                f"DD_day={dd_date_txt} | holding={trade['holding_days']}d"
+                f"DD_day={dd_date_txt} | holding_cal={trade['holding_days']}d | obs={trade['holding_obs']}"
             )
         detail_lines.append("")
 
@@ -605,13 +615,13 @@ def backtest_realrate_state_of_art() -> str:
         "Peso inicial: 1.0x",
         f"Escalonamento: z_2412 >= {add_threshold_2412_mid:.1f} -> +1.0x; z_2412 >= {add_threshold_2412_high:.1f} -> +2.0x",
         "Peso maximo: 4.0x",
-        f"Holding minimo: {holding_minimo_dias} dias",
+        f"Holding minimo para saida por z: {holding_minimo_dias} observacoes da serie",
         "Marcacao e venda: mesmo vencimento comprado na entrada",
         "PnL: compra pelo PU Venda Manha e venda pelo PU Compra Manha",
         "",
         "Stress econômico aproximado:",
         f"carry_proxy_anual = {carry_proxy_fraction:.0%} da taxa real de entrada",
-        "anos_para_recuperar_dd = abs(maxDD_MTM) / carry_proxy_anual",
+        "anos_para_recuperar_dd = abs(maxDD_PU) / carry_proxy_anual",
     ]
 
     if not all_trades:
@@ -798,7 +808,7 @@ def backtest_optimize_realrate_state_of_art_by_duration() -> str:
                         continue
 
                     current_rate, current_pu_compra, _current_pu_venda, quote_date, is_last_available_quote = current_quote
-                    holding_days = i - entry_idx
+                    holding_obs = i - entry_idx
                     current_weight = float(open_position["current_weight"])
 
                     if "entry_pu_venda" not in open_position:
@@ -838,7 +848,7 @@ def backtest_optimize_realrate_state_of_art_by_duration() -> str:
 
                     should_exit = (
                         pd.notna(z2412)
-                        and holding_days >= holding_minimo_dias
+                        and holding_obs >= holding_minimo_dias
                         and z2412 <= exit_threshold
                     )
                     is_last_row = i == len(df) - 1
@@ -846,6 +856,13 @@ def backtest_optimize_realrate_state_of_art_by_duration() -> str:
 
                     if should_exit or forced_exit or is_last_row:
                         exit_date = quote_date if forced_exit else dt
+                        holding_days = (pd.Timestamp(exit_date) - pd.Timestamp(open_position["entry_date"])).days
+                        if should_exit:
+                            exit_reason = "z_saida"
+                        elif forced_exit:
+                            exit_reason = "vencimento_ou_ultima_cotacao"
+                        else:
+                            exit_reason = "aberto"
                         return_pct = _pu_return_pct(
                             float(open_position["entry_pu_venda"]),
                             current_pu_compra,
@@ -863,11 +880,13 @@ def backtest_optimize_realrate_state_of_art_by_duration() -> str:
                                 "exit_pu_compra": float(current_pu_compra),
                                 "max_weight": current_weight,
                                 "holding_days": int(holding_days),
+                                "holding_obs": int(holding_obs),
                                 "rate_move": float(entry_rate - current_rate),
                                 "return_pct": float(return_pct),
                                 "score": float(score),
                                 "max_drawdown_score": float(open_position["worst_mtm_score"]),
                                 "is_open": bool(is_last_row and not should_exit and not forced_exit),
+                                "exit_reason": exit_reason,
                             }
                         )
                         open_position = None
