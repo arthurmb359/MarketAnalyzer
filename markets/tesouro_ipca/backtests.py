@@ -60,6 +60,36 @@ def _pu_return_pct(entry_pu_venda: float, exit_pu_compra: float) -> float:
     return ((exit_pu_compra / entry_pu_venda) - 1.0) * 100.0
 
 
+def _compound_return_pct(*returns_pct: float) -> float:
+    factor = 1.0
+    for return_pct in returns_pct:
+        if pd.isna(return_pct):
+            continue
+        factor *= 1.0 + (float(return_pct) / 100.0)
+    return (factor - 1.0) * 100.0
+
+
+def _bucket_proxy_return_pct(df: pd.DataFrame, start_date: object, end_date: object) -> float:
+    if "pu_venda" not in df.columns or "pu_compra" not in df.columns:
+        return 0.0
+
+    quotes = df.dropna(subset=["data", "pu_venda", "pu_compra"]).sort_values("data")
+    if quotes.empty:
+        return 0.0
+
+    start_quotes = quotes[quotes["data"] >= start_date]
+    end_quotes = quotes[quotes["data"] <= end_date]
+    if start_quotes.empty or end_quotes.empty:
+        return 0.0
+
+    start_quote = start_quotes.iloc[0]
+    end_quote = end_quotes.iloc[-1]
+    if start_quote["data"] >= end_quote["data"]:
+        return 0.0
+
+    return _pu_return_pct(float(start_quote["pu_venda"]), float(end_quote["pu_compra"]))
+
+
 def backtest_optimize_zscore_grid() -> str:
     entry_thresholds = _float_range(1.0, 3.0, 0.2)
     rolling_windows = _int_range(1852, 7300, 730)
@@ -343,7 +373,7 @@ def backtest_realrate_state_of_art() -> str:
             "max_prazo": 20.0,
             "include_max": True,
             "entry_z": 1.2,
-            "exit_z": -2.0,
+            "exit_z": -1.4,
         },
     ]
 
@@ -405,6 +435,7 @@ def backtest_realrate_state_of_art() -> str:
             continue
 
         df["z_2412"] = rolling_zscore(df["taxa_media"], window=2412, min_periods=603)
+        proxy_end_date = df["data"].max()
 
         trades: list[dict[str, float | int | object]] = []
         open_position: dict[str, object] | None = None
@@ -512,7 +543,10 @@ def backtest_realrate_state_of_art() -> str:
                     float(open_position["entry_pu_venda"]),
                     current_pu_compra,
                 )
+                proxy_return_pct = _bucket_proxy_return_pct(df, exit_date, proxy_end_date)
+                total_return_pct = _compound_return_pct(return_pct, proxy_return_pct)
                 score = base_notional * current_weight * (return_pct / 100.0)
+                score_to_present = base_notional * current_weight * (total_return_pct / 100.0)
 
                 carry_proxy_anual = (
                     base_notional
@@ -544,7 +578,10 @@ def backtest_realrate_state_of_art() -> str:
                         "holding_obs": int(holding_obs),
                         "rate_move": float(rate_move),
                         "return_pct": float(return_pct),
+                        "proxy_return_pct": float(proxy_return_pct),
+                        "total_return_pct": float(total_return_pct),
                         "score": float(score),
+                        "score_to_present": float(score_to_present),
                         "max_drawdown_score": float(open_position["worst_mtm_score"]),
                         "max_drawdown_date": open_position["worst_mtm_date"],
                         "weight_at_dd": float(open_position["weight_at_dd"]),
@@ -570,15 +607,19 @@ def backtest_realrate_state_of_art() -> str:
 
         closed_df = trades_df[~trades_df["is_open"].fillna(False)].copy()
         closed_score = float(closed_df["score"].sum()) if not closed_df.empty else float("nan")
+        closed_score_to_present = float(closed_df["score_to_present"].sum()) if not closed_df.empty else float("nan")
         closed_win = win_rate_pct(closed_df["score"]) if not closed_df.empty else float("nan")
 
         summary_lines.append(
             f"{bucket_name}: entry_z={entry_threshold:.1f} | exit_z={exit_threshold:.1f} | "
             f"trades={len(trades_df)} | abertos={int(trades_df['is_open'].fillna(False).sum())} | "
             f"score_total={trades_df['score'].sum():.2f} | "
+            f"score_total_presente={trades_df['score_to_present'].sum():.2f} | "
             f"score_fechado={closed_score:.2f} | "
+            f"score_fechado_presente={closed_score_to_present:.2f} | "
             f"win_fechado={closed_win:.1f}% | "
             f"ret_pu_medio={safe_mean(trades_df['return_pct']):.2f}% | "
+            f"ret_total_presente_medio={safe_mean(trades_df['total_return_pct']):.2f}% | "
             f"pior_dd={trades_df['max_drawdown_score'].min():.2f} | "
             f"periodo={start_date}->{end_date}"
         )
@@ -586,21 +627,31 @@ def backtest_realrate_state_of_art() -> str:
         detail_lines.append(f"[{bucket_name}]")
         for _, trade in trades_df.iterrows():
             z_txt = "nan" if pd.isna(trade["entry_z2412"]) else f"{trade['entry_z2412']:.2f}"
+            exit_z_txt = "nan" if pd.isna(trade["exit_z2412"]) else f"{trade['exit_z2412']:.2f}"
             dd_date_txt = (
                 trade["max_drawdown_date"].strftime("%d/%m/%Y")
                 if pd.notna(trade["max_drawdown_date"])
                 else "n/a"
             )
             venc_txt = trade["entry_vencimento"].strftime("%Y-%m-%d")
+            if trade["exit_reason"] == "z_saida":
+                exit_condition_txt = f"z2412<={exit_threshold:.1f}"
+            elif trade["exit_reason"] == "vencimento_ou_ultima_cotacao":
+                exit_condition_txt = "ultima_cotacao_do_vencimento"
+            else:
+                exit_condition_txt = f"aberto_ate_z2412<={exit_threshold:.1f}"
             detail_lines.append(
                 f"{trade['entry_date'].strftime('%d/%m/%Y')} -> {trade['exit_date'].strftime('%d/%m/%Y')} | "
                 f"status={'aberto' if bool(trade['is_open']) else 'fechado'} | "
-                f"saida={trade['exit_reason']} | "
+                f"saida={trade['exit_reason']} | cond_saida={exit_condition_txt} | z_saida={exit_z_txt} | "
                 f"taxa_compra={trade['entry_rate']:.2f} | venc={venc_txt} | prazo={trade['entry_prazo']:.2f} | "
                 f"pu_entrada={trade['entry_pu_venda']:.2f} | pu_saida={trade['exit_pu_compra']:.2f} | "
                 f"z2412={z_txt} | peso_max={trade['max_weight']:.2f}x | "
                 f"rate_move={trade['rate_move']:+.4f} | ret_pu={trade['return_pct']:.2f}% | "
-                f"score={trade['score']:.2f} | maxDD_PU={trade['max_drawdown_score']:.2f} | "
+                f"ret_proxy_pos_saida={trade['proxy_return_pct']:.2f}% | "
+                f"ret_total_presente={trade['total_return_pct']:.2f}% | "
+                f"score={trade['score']:.2f} | score_presente={trade['score_to_present']:.2f} | "
+                f"maxDD_PU={trade['max_drawdown_score']:.2f} | "
                 f"DD_day={dd_date_txt} | holding_cal={trade['holding_days']}d | obs={trade['holding_obs']}"
             )
         detail_lines.append("")
@@ -609,7 +660,7 @@ def backtest_realrate_state_of_art() -> str:
         "Regras do sistema:",
         "Universo: series media e longa de Tesouro IPCA+",
         "Media: prazo >= 8 e < 14 anos | entry_z=1.0 | exit_z=-1.6",
-        "Grande: prazo >= 14 e <= 20 anos | entry_z=1.2 | exit_z=-2.0",
+        "Grande: prazo >= 14 e <= 20 anos | entry_z=1.2 | exit_z=-1.4",
         "Sinal: z_2412 da serie da faixa, com min_periods=603",
         "Entrada: primeiro cruzamento do entry_z da faixa",
         "Peso inicial: 1.0x",
@@ -618,6 +669,7 @@ def backtest_realrate_state_of_art() -> str:
         f"Holding minimo para saida por z: {holding_minimo_dias} observacoes da serie",
         "Marcacao e venda: mesmo vencimento comprado na entrada",
         "PnL: compra pelo PU Venda Manha e venda pelo PU Compra Manha",
+        "Apos saida: capital realizado rende pela propria serie da faixa ate a data final",
         "",
         "Stress econômico aproximado:",
         f"carry_proxy_anual = {carry_proxy_fraction:.0%} da taxa real de entrada",
@@ -636,7 +688,9 @@ def backtest_realrate_state_of_art() -> str:
 
     win_rate = win_rate_pct(trades_df["score"])
     score_total = trades_df["score"].sum()
+    score_total_presente = trades_df["score_to_present"].sum()
     score_fechado = closed_df["score"].sum() if not closed_df.empty else float("nan")
+    score_fechado_presente = closed_df["score_to_present"].sum() if not closed_df.empty else float("nan")
     win_fechado = win_rate_pct(closed_df["score"]) if not closed_df.empty else float("nan")
 
     resumo_lines = [
@@ -644,10 +698,13 @@ def backtest_realrate_state_of_art() -> str:
         f"trades_abertos={int(trades_df['is_open'].fillna(False).sum())}",
         f"trades_fechados={len(closed_df)}",
         f"score_total={score_total:.2f}",
+        f"score_total_presente={score_total_presente:.2f}",
         f"score_fechado={score_fechado:.2f}",
+        f"score_fechado_presente={score_fechado_presente:.2f}",
         f"win_total={win_rate:.1f}%",
         f"win_fechado={win_fechado:.1f}%",
         f"ret_pu_medio={safe_mean(trades_df['return_pct']):.2f}%",
+        f"ret_total_presente_medio={safe_mean(trades_df['total_return_pct']):.2f}%",
         f"holding_medio={safe_mean(trades_df['holding_days']):.1f}d",
         f"pior_drawdown_pu={trades_df['max_drawdown_score'].min():.2f}",
     ]
@@ -723,9 +780,10 @@ def backtest_optimize_realrate_state_of_art_by_duration() -> str:
         f"Holding minimo: {holding_minimo_dias} dias",
         "Escalonamento fixo: z_2412 >= 1.6 -> +1.0x; z_2412 >= 2.0 -> +2.0x",
         "Peso maximo: 4.0x",
-        "Criterio principal: score_total por PU real",
+        "Criterio principal: score_total_presente por PU real + proxy pos-saida",
         "A marcacao e a venda usam o mesmo vencimento comprado na entrada.",
         "PnL: compra pelo PU Venda Manha e venda pelo PU Compra Manha.",
+        "Apos saida: capital realizado rende pela propria serie da faixa ate a data final.",
         "",
         "Faixas:",
         "Pequena: prazo >= 5 e < 8 anos",
@@ -757,6 +815,7 @@ def backtest_optimize_realrate_state_of_art_by_duration() -> str:
             continue
 
         df["z_2412"] = rolling_zscore(df["taxa_media"], window=2412, min_periods=603)
+        proxy_end_date = df["data"].max()
 
         dates = df["data"].tolist()
         rates = df["taxa_media"].astype(float).tolist()
@@ -867,7 +926,10 @@ def backtest_optimize_realrate_state_of_art_by_duration() -> str:
                             float(open_position["entry_pu_venda"]),
                             current_pu_compra,
                         )
+                        proxy_return_pct = _bucket_proxy_return_pct(df, exit_date, proxy_end_date)
+                        total_return_pct = _compound_return_pct(return_pct, proxy_return_pct)
                         score = base_notional * current_weight * (return_pct / 100.0)
+                        score_to_present = base_notional * current_weight * (total_return_pct / 100.0)
 
                         trades.append(
                             {
@@ -883,7 +945,10 @@ def backtest_optimize_realrate_state_of_art_by_duration() -> str:
                                 "holding_obs": int(holding_obs),
                                 "rate_move": float(entry_rate - current_rate),
                                 "return_pct": float(return_pct),
+                                "proxy_return_pct": float(proxy_return_pct),
+                                "total_return_pct": float(total_return_pct),
                                 "score": float(score),
+                                "score_to_present": float(score_to_present),
                                 "max_drawdown_score": float(open_position["worst_mtm_score"]),
                                 "is_open": bool(is_last_row and not should_exit and not forced_exit),
                                 "exit_reason": exit_reason,
@@ -900,15 +965,19 @@ def backtest_optimize_realrate_state_of_art_by_duration() -> str:
                             "trades": 0,
                             "open_trades": 0,
                             "score_total": float("nan"),
+                            "score_total_present": float("nan"),
                             "score_mean": float("nan"),
                             "avg_return": float("nan"),
+                            "avg_total_return": float("nan"),
                             "median_return": float("nan"),
                             "win_rate": float("nan"),
                             "worst_dd": float("nan"),
                             "holding_mean": float("nan"),
                             "closed_trades": 0,
                             "closed_score_total": float("nan"),
+                            "closed_score_total_present": float("nan"),
                             "closed_avg_return": float("nan"),
+                            "closed_avg_total_return": float("nan"),
                             "closed_median_return": float("nan"),
                             "closed_win_rate": float("nan"),
                             "closed_worst_dd": float("nan"),
@@ -922,7 +991,9 @@ def backtest_optimize_realrate_state_of_art_by_duration() -> str:
                     closed_summary = {
                         "closed_trades": 0,
                         "closed_score_total": float("nan"),
+                        "closed_score_total_present": float("nan"),
                         "closed_avg_return": float("nan"),
+                        "closed_avg_total_return": float("nan"),
                         "closed_median_return": float("nan"),
                         "closed_win_rate": float("nan"),
                         "closed_worst_dd": float("nan"),
@@ -932,7 +1003,9 @@ def backtest_optimize_realrate_state_of_art_by_duration() -> str:
                     closed_summary = {
                         "closed_trades": int(len(closed_trades_df)),
                         "closed_score_total": float(closed_trades_df["score"].sum()),
+                        "closed_score_total_present": float(closed_trades_df["score_to_present"].sum()),
                         "closed_avg_return": safe_mean(closed_trades_df["return_pct"]),
+                        "closed_avg_total_return": safe_mean(closed_trades_df["total_return_pct"]),
                         "closed_median_return": safe_median(closed_trades_df["return_pct"]),
                         "closed_win_rate": win_rate_pct(closed_trades_df["score"]),
                         "closed_worst_dd": float(closed_trades_df["max_drawdown_score"].min()),
@@ -946,8 +1019,10 @@ def backtest_optimize_realrate_state_of_art_by_duration() -> str:
                         "trades": int(len(trades_df)),
                         "open_trades": int(trades_df["is_open"].fillna(False).sum()),
                         "score_total": float(trades_df["score"].sum()),
+                        "score_total_present": float(trades_df["score_to_present"].sum()),
                         "score_mean": safe_mean(trades_df["score"]),
                         "avg_return": safe_mean(trades_df["return_pct"]),
+                        "avg_total_return": safe_mean(trades_df["total_return_pct"]),
                         "median_return": safe_median(trades_df["return_pct"]),
                         "win_rate": win_rate_pct(trades_df["score"]),
                         "worst_dd": float(trades_df["max_drawdown_score"].min()),
@@ -959,7 +1034,7 @@ def backtest_optimize_realrate_state_of_art_by_duration() -> str:
         valid_results = [
             row
             for row in bucket_results
-            if not pd.isna(row["score_total"]) and int(row["trades"]) > 0
+            if not pd.isna(row["score_total_present"]) and int(row["trades"]) > 0
         ]
 
         start_date = df["data"].min().strftime("%d/%m/%Y")
@@ -979,8 +1054,8 @@ def backtest_optimize_realrate_state_of_art_by_duration() -> str:
         sorted_all_results = sorted(
             valid_results,
             key=lambda row: (
-                float(row["score_total"]),
-                float(row["avg_return"]),
+                float(row["score_total_present"]),
+                float(row["avg_total_return"]),
                 float(row["win_rate"]),
             ),
             reverse=True,
@@ -989,8 +1064,10 @@ def backtest_optimize_realrate_state_of_art_by_duration() -> str:
 
         best_all_lines.append(
             f"{bucket_name}: entry_z={best_all['entry_z']:.1f} | exit_z={best_all['exit_z']:.1f} | "
-            f"score_total={best_all['score_total']:.2f} | trades={best_all['trades']} | "
+            f"score_total_presente={best_all['score_total_present']:.2f} | "
+            f"score_trade={best_all['score_total']:.2f} | trades={best_all['trades']} | "
             f"abertos={best_all['open_trades']} | win={best_all['win_rate']:.1f}% | "
+            f"ret_total_presente_medio={best_all['avg_total_return']:.2f}% | "
             f"ret_pu_medio={best_all['avg_return']:.2f}% | ret_pu_mediana={best_all['median_return']:.2f}% | "
             f"pior_dd={best_all['worst_dd']:.2f} | holding={best_all['holding_mean']:.1f}d | "
             f"periodo={start_date}->{end_date}"
@@ -999,15 +1076,15 @@ def backtest_optimize_realrate_state_of_art_by_duration() -> str:
         valid_closed_results = [
             row
             for row in valid_results
-            if not pd.isna(row["closed_score_total"]) and int(row["closed_trades"]) > 0
+            if not pd.isna(row["closed_score_total_present"]) and int(row["closed_trades"]) > 0
         ]
 
         if valid_closed_results:
             sorted_closed_results = sorted(
                 valid_closed_results,
                 key=lambda row: (
-                    float(row["closed_score_total"]),
-                    float(row["closed_avg_return"]),
+                    float(row["closed_score_total_present"]),
+                    float(row["closed_avg_total_return"]),
                     float(row["closed_win_rate"]),
                 ),
                 reverse=True,
@@ -1015,9 +1092,11 @@ def backtest_optimize_realrate_state_of_art_by_duration() -> str:
             best_closed = sorted_closed_results[0]
             best_closed_lines.append(
                 f"{bucket_name}: entry_z={best_closed['entry_z']:.1f} | exit_z={best_closed['exit_z']:.1f} | "
-                f"score_total_fechado={best_closed['closed_score_total']:.2f} | "
+                f"score_total_presente_fechado={best_closed['closed_score_total_present']:.2f} | "
+                f"score_trade_fechado={best_closed['closed_score_total']:.2f} | "
                 f"trades_fechados={best_closed['closed_trades']} | "
                 f"win={best_closed['closed_win_rate']:.1f}% | "
+                f"ret_total_presente_medio={best_closed['closed_avg_total_return']:.2f}% | "
                 f"ret_pu_medio={best_closed['closed_avg_return']:.2f}% | "
                 f"ret_pu_mediana={best_closed['closed_median_return']:.2f}% | "
                 f"pior_dd={best_closed['closed_worst_dd']:.2f} | "
@@ -1034,8 +1113,10 @@ def backtest_optimize_realrate_state_of_art_by_duration() -> str:
         for idx, row in enumerate(sorted_all_results[:10], start=1):
             top_all_lines.append(
                 f"{idx:02d}. entry_z={row['entry_z']:.1f} | exit_z={row['exit_z']:.1f} | "
-                f"score_total={row['score_total']:.2f} | trades={row['trades']} | "
+                f"score_total_presente={row['score_total_present']:.2f} | "
+                f"score_trade={row['score_total']:.2f} | trades={row['trades']} | "
                 f"abertos={row['open_trades']} | win={row['win_rate']:.1f}% | "
+                f"ret_total_presente_medio={row['avg_total_return']:.2f}% | "
                 f"ret_pu_medio={row['avg_return']:.2f}% | pior_dd={row['worst_dd']:.2f}"
             )
         top_all_lines.append("")
@@ -1045,9 +1126,11 @@ def backtest_optimize_realrate_state_of_art_by_duration() -> str:
             for idx, row in enumerate(sorted_closed_results[:10], start=1):
                 top_closed_lines.append(
                     f"{idx:02d}. entry_z={row['entry_z']:.1f} | exit_z={row['exit_z']:.1f} | "
-                    f"score_total_fechado={row['closed_score_total']:.2f} | "
+                    f"score_total_presente_fechado={row['closed_score_total_present']:.2f} | "
+                    f"score_trade_fechado={row['closed_score_total']:.2f} | "
                     f"trades_fechados={row['closed_trades']} | "
                     f"win={row['closed_win_rate']:.1f}% | "
+                    f"ret_total_presente_medio={row['closed_avg_total_return']:.2f}% | "
                     f"ret_pu_medio={row['closed_avg_return']:.2f}% | "
                     f"pior_dd={row['closed_worst_dd']:.2f}"
                 )

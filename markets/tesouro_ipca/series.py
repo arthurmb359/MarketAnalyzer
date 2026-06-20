@@ -81,7 +81,14 @@ def build_daily_ipca_duration_bucket_series(
 
     if filtered.empty:
         return pd.DataFrame(
-            columns=["data", "taxa_media", "prazo_anos", "data_vencimento"]
+            columns=[
+                "data",
+                "taxa_media",
+                "prazo_anos",
+                "data_vencimento",
+                "pu_compra",
+                "pu_venda",
+            ]
         )
 
     idx = filtered.groupby("Data Base")["Prazo_anos"].idxmax()
@@ -95,10 +102,17 @@ def build_daily_ipca_duration_bucket_series(
             "Taxa Compra Manha": "taxa_media",
             "Prazo_anos": "prazo_anos",
             "Data Vencimento": "data_vencimento",
+            "PU Compra Manha": "pu_compra",
+            "PU Venda Manha": "pu_venda",
         }
     )
 
-    return daily[["data", "taxa_media", "prazo_anos", "data_vencimento"]].copy()
+    columns = ["data", "taxa_media", "prazo_anos", "data_vencimento"]
+    for optional_column in ["pu_compra", "pu_venda"]:
+        if optional_column in daily.columns:
+            columns.append(optional_column)
+
+    return daily[columns].copy()
 
 
 __all__ = ["build_daily_ipca_duration_bucket_series", "build_daily_ipca_long_series"]

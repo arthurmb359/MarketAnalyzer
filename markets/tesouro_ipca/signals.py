@@ -167,7 +167,7 @@ def backtest_ipca_entry_signal() -> str:
             "max_prazo": 20.0,
             "include_max": True,
             "entry_z": 1.2,
-            "exit_z": -2.0,
+            "exit_z": -1.4,
         },
     ]
 
